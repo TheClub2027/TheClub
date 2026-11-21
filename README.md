@@ -9,7 +9,7 @@ pnpm install
 pnpm dev
 ```
 
-Without Supabase credentials, careers save in this browser. For account-backed saves, copy `.env.example` to `.env.local`, set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, and apply `supabase/migrations/202611210001_career_saves.sql` to your Supabase project. Row-level security restricts every career to its authenticated owner. Never put a Supabase secret key in browser code.
+Without Supabase credentials, careers save in this browser. For account-backed saves, copy `.env.example` to `.env.local`, set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, and apply `supabase/migrations/20261121172753_create_career_saves.sql` to your Supabase project. Row-level security restricts every career to its authenticated owner. Never put a Supabase secret key in browser code.
 
 ## Checks
 
