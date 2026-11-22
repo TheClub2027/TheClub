@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 510 116" fill="none">
+  <rect x="3" y="3" width="110" height="110" rx="28" fill="#DDF28A"/>
+  <path d="M19 82V46L58 18l39 28v36" stroke="#17231D" stroke-width="6" stroke-linejoin="round"/>
+  <path d="M29 57h58M34 68h48M43 79h30" stroke="#17231D" stroke-width="4" stroke-linecap="round" opacity=".66"/>
+  <circle cx="58" cy="64" r="13" fill="#17231D"/>
+  <path d="m58 55 6 4-2 7h-8l-2-7 6-4Zm-10 5-5-1m30 1 5-1m-20 17 2 5" stroke="#DDF28A" stroke-width="2.2"/>
+  <path d="M13 92h90" stroke="#17231D" stroke-width="5" stroke-linecap="round"/>
+  <text x="144" y="42" fill="#53695B" font-family="Arial,sans-serif" font-size="12" font-weight="700" letter-spacing="4">FOOTBALL · BUILT TOGETHER</text>
+  <text x="140" y="99" fill="#17231D" font-family="Arial,sans-serif" font-size="60" font-weight="800" letter-spacing="-3">THE CLUB</text>
+  <path d="M435 30h44" stroke="#DDF28A" stroke-width="4" stroke-linecap="round"/>
+</svg>
