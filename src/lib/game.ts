@@ -1,9 +1,11 @@
-import { getWorldPlayerDetails } from "./world-database";
-import { BASE_CLUB_STAFF_COUNT, createClubPersonnel, getWorldStaffById, STAFF_ROLES } from "./world-staff-database";
+import { getWorldPlayerDetails, WORLD_PLAYER_COUNTRIES } from "./world-database";
+import { BASE_CLUB_STAFF_COUNT, createClubPersonnel, getWorldStaffById, staffStartIndexForClub, STAFF_ROLES } from "./world-staff-database";
 import type { StaffMember, StaffRole } from "./world-staff-database";
 import { ENGLISH_CLUB_SEEDS, ENGLISH_LEAGUES, leagueDefinition } from "./league-pyramid";
 import type { LeagueId } from "./league-pyramid";
+import { WORLD_CLUB_SEEDS, WORLD_LEAGUES } from "./world-leagues";
 import { defaultExecutiveBoxes, defaultStandDesigns, defaultStandRoofs } from "./stadium-designs";
+import { formatGameCurrency, readGameSettings } from "./game-settings";
 import type { ExecutiveBoxesBySide, StandDesigns, StandRoofs } from "./stadium-designs";
 
 const CLUB_SEEDS = ENGLISH_CLUB_SEEDS;
@@ -44,6 +46,7 @@ export type Player = {
   clubId: string | null;
   trainingFocus: string;
   nationality?: string;
+  country?: string;
   squadLevel?: SquadLevel;
   managerRapport?: number;
   role?: string;
@@ -101,7 +104,7 @@ export type Club = {
   name: string;
   shortName: string;
   city: string;
-  leagueId: LeagueId | "regional-north" | "regional-south";
+  leagueId: string;
   region: string;
   foundedYear?: number;
   nickname?: string;
@@ -136,7 +139,7 @@ export type Fixture = {
   id: string;
   season: number;
   round: number;
-  leagueId?: LeagueId;
+  leagueId?: string;
   homeClubId: string;
   awayClubId: string;
   played: boolean;
@@ -150,6 +153,7 @@ export type NewsItem = { id: string; date: string; headline: string; body: strin
 export type MatchReport = { fixtureId: string; result: string; headline: string; notes: string[] };
 
 export type Career = {
+  schemaVersion?: number;
   id: string;
   manager: string;
   clubId: string;
@@ -198,20 +202,26 @@ const STADIUM_IDENTITIES: { name: string; architecture: StadiumArchitecture; roo
   { name: "Railway Crescent", architecture: "Railway truss", roof: "Cantilever", tiers: { north: 2, east: 1, south: 2, west: 2 }, corners: { northWest: false, northEast: true, southWest: true, southEast: true } },
   { name: "Bracken Bowl", architecture: "Garden bowl", roof: "Continuous bowl", tiers: { north: 1, east: 1, south: 2, west: 1 }, corners: { northWest: true, northEast: false, southWest: false, southEast: false } },
   { name: "The Civic Stand", architecture: "Civic colonnade", roof: "Flat canopy", tiers: { north: 1, east: 2, south: 1, west: 1 }, corners: { northWest: false, northEast: true, southWest: false, southEast: true } },
-  { name: "Merewater Park", architecture: "Lakeside canopy", roof: "Open sky", tiers: { north: 1, east: 1, south: 2, west: 1 }, corners: { northWest: true, northEast: true, southWest: false, southEast: false } },
-  { name: "Market Cross", architecture: "Market hall", roof: "Flat canopy", tiers: { north: 1, east: 1, south: 1, west: 2 }, corners: { northWest: false, northEast: false, southWest: true, southEast: false } },
+  { name: "Merechester Crown Ground", architecture: "Clocktower brick", roof: "Continuous bowl", tiers: { north: 3, east: 2, south: 3, west: 2 }, corners: { northWest: true, northEast: true, southWest: true, southEast: true } },
+  { name: "Redcliffe Memorial Ground", architecture: "Foundry arches", roof: "Cantilever", tiers: { north: 2, east: 2, south: 2, west: 2 }, corners: { northWest: true, northEast: false, southWest: true, southEast: true } },
   { name: "Beacon Lane", architecture: "Beacon tower", roof: "Cantilever", tiers: { north: 1, east: 1, south: 1, west: 1 }, corners: { northWest: true, northEast: false, southWest: true, southEast: false } },
   { name: "Southbank Exchange", architecture: "Southbank lattice", roof: "Retractable roof", tiers: { north: 1, east: 1, south: 1, west: 1 }, corners: { northWest: false, northEast: true, southWest: false, southEast: true } },
 ];
 
 const FIRST_NAMES = ["Ari", "Callum", "Dara", "Elliot", "Finlay", "Hugo", "Isaac", "Jude", "Kian", "Lewis", "Milan", "Noah", "Oscar", "Perry", "Rafi", "Sam", "Tariq", "Vinnie", "Wes", "Zain"];
 const LAST_NAMES = ["Ainsley", "Bennett", "Clarke", "Doyle", "Ellery", "Fletcher", "Grady", "Haines", "Irwin", "Keane", "Lowry", "Marlow", "Noble", "Osei", "Pike", "Quinn", "Rowe", "Shaw", "Turner", "Vale"];
-const NATIONALITIES = ["English", "Scottish", "Welsh", "Irish", "French", "Spanish", "German", "Dutch", "Italian", "Portuguese", "Swedish", "Danish", "Belgian", "Norwegian", "Polish"];
+const NATIONALITIES = WORLD_PLAYER_COUNTRIES;
 const NATIONALITY_BIRTHPLACES: Record<string, string[]> = {
   English: ["Northport", "Halloway", "Kingshaven", "Eastmere", "Brackenford", "Alderwich"], Scottish: ["Inverhaven", "Dunross", "Braemar", "Aberloch"], Welsh: ["Brynford", "Llanmere", "Cwmhaven", "Porthwick"], Irish: ["Ardmore", "Kilross", "Dunloe", "Rathwick"],
   French: ["Clairmont", "Douvray", "Montfleur", "Valeroux"], Spanish: ["Almaraz", "Estrella", "Monteluz", "Puerto Real"], German: ["Altenburg", "Dornheim", "Lindenau", "Waldheim"], Dutch: ["Aarden", "Dijkhaven", "Havenwijk", "Veldrecht"],
   Italian: ["Bellacqua", "Fontesole", "Portovivo", "San Celso"], Portuguese: ["Alvorada", "Costa Nova", "Porteluz", "Vale do Sol"], Swedish: ["Alvesta", "Bjorvik", "Hammarby Strand", "Vallvik"], Danish: ["Aalholm", "Egeborg", "Lindholm", "Sonderby"], Belgian: ["Beaufort", "Clairval", "Montclair", "Westerloo"], Norwegian: ["Austvik", "Fjellhamn", "Nordhavn", "Vestfjord"], Polish: ["Czarnow", "Dabrowa", "Nowa Rzeka", "Sokolow"],
 };
+const WORLD_BIRTHPLACES = new Map<string, string[]>();
+for (const seed of [...WORLD_CLUB_SEEDS, ...ENGLISH_CLUB_SEEDS.map((club) => ({ ...club, country: "England" }))]) {
+  const places = WORLD_BIRTHPLACES.get(seed.country) ?? [];
+  if (!places.includes(seed.city)) places.push(seed.city);
+  WORLD_BIRTHPLACES.set(seed.country, places);
+}
 const FORMATIONS: Record<string, Position[]> = {
   "4-4-2": ["GK", "DEF", "DEF", "DEF", "DEF", "MID", "MID", "MID", "MID", "FWD", "FWD"],
   "4-3-3": ["GK", "DEF", "DEF", "DEF", "DEF", "MID", "MID", "MID", "FWD", "FWD", "FWD"],
@@ -257,7 +267,7 @@ function addPlayerProfile(player: Player, season = 1) {
   const month = 1 + seed % 6;
   const day = 1 + Math.floor(seed / 7) % 27;
   const nationality = player.nationality ?? "English";
-  const places = NATIONALITY_BIRTHPLACES[nationality] ?? NATIONALITY_BIRTHPLACES.English;
+  const places = NATIONALITY_BIRTHPLACES[nationality] ?? WORLD_BIRTHPLACES.get(nationality) ?? NATIONALITY_BIRTHPLACES.English;
   player.dateOfBirth ??= `${String(gameYear - player.age).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
   player.birthPlace ??= places[Math.floor(seed / 13) % places.length];
   player.careerStats ??= emptyPlayerStats();
@@ -266,7 +276,7 @@ function addPlayerProfile(player: Player, season = 1) {
   const currentClub = CLUB_SEEDS.find((club) => club.short === player.clubId);
   if (!player.clubHistory) {
     const clubName = player.clubId === null || player.id.startsWith("free-") || player.id.startsWith("scout-") ? "Unattached" : currentClub?.name ?? `${player.clubId} Academy`;
-    player.clubHistory = player.clubId && !player.id.startsWith("free-") && !player.id.startsWith("scout-") ? [{ clubId: player.clubId, clubName, country: "England", fromSeason: season, toSeason: null, squadLevel: player.squadLevel ?? squadLevelForAge(player.age), appearances: 0, goals: 0, assists: 0, cleanSheets: 0 }] : [];
+    player.clubHistory = player.clubId && !player.id.startsWith("free-") && !player.id.startsWith("scout-") ? [{ clubId: player.clubId, clubName, country: player.country ?? currentClub?.country ?? "England", fromSeason: season, toSeason: null, squadLevel: player.squadLevel ?? squadLevelForAge(player.age), appearances: 0, goals: 0, assists: 0, cleanSheets: 0 }] : [];
   }
   if (!player.academyHistory) player.academyHistory = player.age < 21 && player.clubId && !player.id.startsWith("scout-") ? [{ season, age: player.age, squadLevel: player.squadLevel ?? squadLevelForAge(player.age), academyLevel: player.age < 16 ? 1 : 2 }] : [];
   return player;
@@ -282,21 +292,30 @@ function makeClubStory(seed: (typeof CLUB_SEEDS)[number], index: number) {
   const companyTypes = ["Renewables", "Freight & Rail", "Mutual", "Digital Works", "Marine Group", "Engineering", "Building Society", "Foods", "Motors", "Telecom", "Steel & Fabrication", "Community Bank"];
   const sponsor = `${seed.city} ${companyTypes[(index * 5 + stableSeed(seed.city)) % companyTypes.length]}`;
   const heritage = `${seed.region} football has always been shaped by close-knit grounds and local pride.`;
-  const bio = `${seed.name} were formed in ${foundingYear} by ${origin} around ${seed.city}. The club's ${nickname.toLowerCase()} identity grew alongside the town's working life, and generations of families have made the ground a meeting place on matchday. ${heritage} Today the club remains locally rooted while ${sponsor} backs its next chapter.`;
+  const fallenGiant = seed.short === "MCA" || seed.short === "RCB";
+  const bio = fallenGiant
+    ? `${seed.name} were formed in ${foundingYear} around ${seed.city}. For generations the club was a fixture in the top division, filling a ground built for bigger nights. Relegation and financial strain brought the old stand's crowds down, but the town still sees a return to the top as part of its story. ${heritage} Today ${sponsor} backs the rebuild.`
+    : `${seed.name} were formed in ${foundingYear} by ${origin} around ${seed.city}. The club's ${nickname.toLowerCase()} identity grew alongside the town's working life, and generations of families have made the ground a meeting place on matchday. ${heritage} Today the club remains locally rooted while ${sponsor} backs its next chapter.`;
   const history: ClubHistoryMoment[] = [
     { year: foundingYear, title: "A club takes shape", detail: `${seed.name} begin as a community side for ${seed.city} and its surrounding neighbourhoods.` },
     { year: expansionYear, title: "The town gets behind the side", detail: `A new stand and a growing local following establish ${seed.name} as one of the area's best-known institutions.` },
     { year: modernYear, title: "A modern chapter", detail: `The club refreshes its ground and academy, carrying ${seed.region} traditions into a new generation.` },
   ];
+  if (fallenGiant) {
+    history.splice(2, 0,
+      { year: Math.max(foundingYear + 20, modernYear - 28), title: "A giant of the old division", detail: `${seed.name} win promotion to the top flight and expand the ground to hold more than 18,000 supporters.` },
+      { year: Math.max(foundingYear + 24, modernYear - 12), title: "The long fall", detail: `A financial squeeze and successive relegations leave the club playing far below the level its stadium was built for.` },
+    );
+  }
   return { foundingYear, nickname, sponsor, bio, history };
 }
 
-function nearbyRivals(seed: (typeof CLUB_SEEDS)[number]) {
-  const regionalMatches = CLUB_SEEDS.filter((club) => club.short !== seed.short && club.region === seed.region);
+function nearbyRivals(seed: { short: string; region: string }, seeds: readonly { short: string; region: string }[] = CLUB_SEEDS) {
+  const regionalMatches = seeds.filter((club) => club.short !== seed.short && club.region === seed.region);
   const broadRegion = seed.region.includes("North") || seed.region.includes("Yorkshire") || seed.region.includes("West Midlands") ? "North" : "South";
   const nearby = regionalMatches.length >= 2 ? regionalMatches : [
     ...regionalMatches,
-    ...CLUB_SEEDS.filter((club) => club.short !== seed.short && (club.region.includes("North") || club.region.includes("Yorkshire") || club.region.includes("West Midlands") ? "North" : "South") === broadRegion),
+    ...seeds.filter((club) => club.short !== seed.short && (club.region.includes("North") || club.region.includes("Yorkshire") || club.region.includes("West Midlands") ? "North" : "South") === broadRegion),
   ];
   return [...new Set(nearby.map((club) => club.short))].slice(0, 2);
 }
@@ -311,7 +330,7 @@ function refreshPlayerProfile(player: Player, season: number) {
   return player;
 }
 
-function createPlayer(id: string, clubId: string, position: Position, base: number, random: () => number): Player {
+function createPlayer(id: string, clubId: string, position: Position, base: number, random: () => number, country = "England"): Player {
   const age = 18 + Math.floor(random() * 17);
   const overall = Math.max(43, Math.min(86, base + Math.floor(random() * 12) - 5));
   const potential = Math.min(91, Math.max(overall, overall + Math.floor(random() * Math.max(2, 20 - Math.max(0, age - 20)))));
@@ -330,6 +349,7 @@ function createPlayer(id: string, clubId: string, position: Position, base: numb
     morale: 55 + Math.floor(random() * 36),
     clubId,
     trainingFocus: "Balanced",
+    country,
     nationality: NATIONALITIES[Math.floor(random() * NATIONALITIES.length)],
     squadLevel: squadLevelForAge(age),
     managerRapport: 58,
@@ -384,16 +404,33 @@ export function generateEnglishFixtures(season: number, clubs: Pick<Club, "id" |
   ));
 }
 
+export function generateCareerFixtures(season: number, clubs: Pick<Club, "id" | "leagueId">[]): Fixture[] {
+  const fixtures = generateEnglishFixtures(season, clubs);
+  const activeWorldLeagues = [...new Set(clubs.map((club) => club.leagueId).filter((id) => WORLD_LEAGUES.some((league) => league.id === id)))];
+  for (const leagueId of activeWorldLeagues) {
+    const clubIds = clubs.filter((club) => club.leagueId === leagueId).map((club) => club.id);
+    fixtures.push(...generateFixtures(season, clubIds, leagueId));
+  }
+  return fixtures;
+}
+
 export function createCareer(manager: string, chosenClubId: string): Career {
-  const clubIds = CLUB_SEEDS.map((club) => club.short);
+  const difficulty = readGameSettings().difficulty;
+  const openingFundsFactor = difficulty === "Relaxed" ? 1.25 : difficulty === "Challenging" ? 0.78 : 1;
+  const boardTrustAdjustment = difficulty === "Relaxed" ? 10 : difficulty === "Challenging" ? -8 : 0;
+  const internationalChoice = WORLD_CLUB_SEEDS.find((club) => club.short === chosenClubId);
+  const careerSeeds = internationalChoice
+    ? [...CLUB_SEEDS, ...WORLD_CLUB_SEEDS.filter((club) => club.leagueId === internationalChoice.leagueId)]
+    : CLUB_SEEDS;
+  const clubIds = careerSeeds.map((club) => club.short);
   const chosenIndex = Math.max(0, clubIds.indexOf(chosenClubId));
-  const clubs: Club[] = CLUB_SEEDS.map((club, index) => {
+  const clubs: Club[] = careerSeeds.map((club, index) => {
     const weeklyBudget = Math.max(18_000, Math.round((club.reputation - 15) * 1350 / 1000) * 1000);
     const initialCapacity = club.capacity;
     const identity = STADIUM_IDENTITIES[index % STADIUM_IDENTITIES.length];
     const league = leagueDefinition(club.leagueId);
     const story = makeClubStory(club, index);
-    const personnel = createClubPersonnel(club.short, club.name, index * 12);
+    const personnel = createClubPersonnel(club.short, club.name, staffStartIndexForClub(club.short));
     return {
       id: club.short,
       name: club.name,
@@ -404,9 +441,9 @@ export function createCareer(manager: string, chosenClubId: string): Career {
       foundedYear: story.foundingYear,
       nickname: story.nickname,
       bio: story.bio,
-      rivals: nearbyRivals(club),
+      rivals: nearbyRivals(club, careerSeeds),
       history: story.history,
-      country: "England",
+      country: club.country ?? "England",
       colors: club.colors,
       reputation: club.reputation,
       targetPosition: Math.max(1, Math.min(league.clubs, Math.round(league.clubs * (club.reputation >= 70 ? 0.28 : club.reputation >= 50 ? 0.5 : 0.57)))),
@@ -446,11 +483,11 @@ export function createCareer(manager: string, chosenClubId: string): Career {
         architecture: identity.architecture,
         project: null,
       },
-      balance: Math.max(420_000, Math.round((1.2 + (club.reputation - 52) * 0.13) * 1_000_000)),
-      transferBudget: Math.max(90_000, Math.round((0.3 + (club.reputation - 35) * 0.06) * 1_000_000)),
+      balance: Math.max(420_000, Math.round((1.2 + (club.reputation - 52) * 0.13) * 1_000_000 * openingFundsFactor)),
+      transferBudget: Math.max(90_000, Math.round((0.3 + (club.reputation - 35) * 0.06) * 1_000_000 * openingFundsFactor)),
       wageBudget: weeklyBudget,
       debt: 0,
-      boardTrust: 62 + Math.max(0, 5 - Math.abs(index - chosenIndex)) * 2,
+      boardTrust: Math.max(10, Math.min(95, 62 + Math.max(0, 5 - Math.abs(index - chosenIndex)) * 2 + boardTrustAdjustment)),
       supporterConfidence: 58 + Math.round((club.reputation - 52) / 5),
       sponsor: story.sponsor,
       sponsorAnnual: Math.round(club.reputation * 14000),
@@ -472,10 +509,10 @@ export function createCareer(manager: string, chosenClubId: string): Career {
     const random = randomFrom(74821 + clubIndex * 41);
     const base = 50 + Math.round((club.reputation - 52) * 0.4);
     rosterPositions.forEach((position, playerIndex) => {
-      players.push(createPlayer(`${club.id}-${String(playerIndex + 1).padStart(2, "0")}`, club.id, position, base, random));
+      players.push(createPlayer(`${club.id}-${String(playerIndex + 1).padStart(2, "0")}`, club.id, position, base, random, club.country ?? "England"));
     });
     for (let index = 0; index < 2; index += 1) {
-      const youth = createPlayer(`${club.id}-youth-${index + 1}`, club.id, (["DEF", "MID", "FWD", "GK"] as Position[])[(clubIndex + index) % 4], Math.max(24, base - 17), random);
+      const youth = createPlayer(`${club.id}-youth-${index + 1}`, club.id, (["DEF", "MID", "FWD", "GK"] as Position[])[(clubIndex + index) % 4], Math.max(24, base - 17), random, club.country ?? "England");
       youth.age = 15 + index;
       youth.overall = Math.max(24, 25 + Math.round(youth.age * 0.9) + Math.floor(random() * 7));
       youth.potential = Math.min(91, youth.overall + 23 + Math.floor(random() * 20));
@@ -496,7 +533,7 @@ export function createCareer(manager: string, chosenClubId: string): Career {
     players.push(player);
   }
   // A visible academy pipeline starts at age five and spans each development band.
-  const academyClub = CLUB_SEEDS[chosenIndex]?.short ?? CLUB_SEEDS[0].short;
+  const academyClub = careerSeeds[chosenIndex]?.short ?? CLUB_SEEDS[0].short;
   const academyRandom = randomFrom(41573 + chosenIndex * 29);
   const academyAges = Array.from({ length: 16 }, (_, index) => index + 5);
   academyAges.forEach((age, ageIndex) => {
@@ -537,9 +574,10 @@ export function createCareer(manager: string, chosenClubId: string): Career {
   }
 
   const club = clubs.find((item) => item.id === chosenClubId) ?? clubs[0];
-  const selection = players.filter((player) => player.clubId === club.id && player.age >= 16).sort((a, b) => b.overall - a.overall).slice(0, 11).map((player) => player.id);
+  const selection = createStartingXI(players, club.id, "4-3-3");
   const id = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `career-${Date.now()}`;
   return {
+    schemaVersion: 2,
     id,
     manager: manager.trim() || "Alex Morgan",
     clubId: club.id,
@@ -547,7 +585,7 @@ export function createCareer(manager: string, chosenClubId: string): Career {
     round: 1,
     clubs,
     players,
-    fixtures: generateEnglishFixtures(1, clubs),
+    fixtures: generateCareerFixtures(1, clubs),
     formation: "4-3-3",
     mentality: "Balanced",
     style: "Possession",
@@ -574,6 +612,17 @@ export function createCareer(manager: string, chosenClubId: string): Career {
     scoutingReports: [],
     staffChanges: {},
   };
+}
+
+function createStartingXI(players: Player[], clubId: string, formation: string) {
+  const available = players.filter((player) => player.clubId === clubId && player.age >= 16).sort((a, b) => b.overall - a.overall);
+  const lineup: Player[] = [];
+  for (const position of getFormationSlots(formation)) {
+    const matchIndex = available.findIndex((player) => player.position === position);
+    const chosen = available.splice(matchIndex >= 0 ? matchIndex : 0, 1)[0];
+    if (chosen) lineup.push(chosen);
+  }
+  return lineup.map((player) => player.id);
 }
 
 export function squadLevelForAge(age: number): SquadLevel {
@@ -607,11 +656,18 @@ export function normalizeCareer(career: Career): Career {
       round: 1,
       clubs,
       players,
-      fixtures: generateEnglishFixtures(migratedSeason, clubs),
+      fixtures: generateCareerFixtures(migratedSeason, clubs),
       history: [...next.history],
       lastReport: null,
       news: [{ id: `pyramid-${migratedSeason}`, date: "01 Jul", headline: "The English league pyramid expands", body: "A full seven-division national and regional pyramid is now in place. The manager keeps their club, squad and finances as the new campaign begins.", type: "club" }, ...next.news],
     };
+  }
+  if ((next.schemaVersion ?? 1) < 2) {
+    const oldDefaultXI = next.players.filter((player) => player.clubId === next.clubId && player.age >= 16).sort((a, b) => b.overall - a.overall).slice(0, 11).map((player) => player.id);
+    if (next.lineup.length === oldDefaultXI.length && next.lineup.every((playerId, index) => playerId === oldDefaultXI[index])) {
+      next.lineup = createStartingXI(next.players, next.clubId, next.formation);
+    }
+    next.schemaVersion = 2;
   }
   next.staffChanges ??= {};
   for (const club of next.clubs) {
@@ -621,7 +677,8 @@ export function normalizeCareer(career: Career): Career {
     const feederParts = club.id.match(/^feeder-(n|s)-(\d+)-(\d+)$/);
     const feederSeason = feederParts ? Number(feederParts[2]) : next.season;
     const feederIndex = feederParts ? Number(feederParts[3]) - 1 : 0;
-    const staffStart = seedIndex >= 0 ? seedIndex * 12 : BASE_CLUB_STAFF_COUNT + Math.max(0, feederSeason - 2) * 96 + (feederParts?.[1] === "s" ? 48 : 0) + feederIndex * 12;
+    const globalStaffStart = staffStartIndexForClub(club.id);
+    const staffStart = seedIndex >= 0 || globalStaffStart > 0 ? globalStaffStart : BASE_CLUB_STAFF_COUNT + Math.max(0, feederSeason - 2) * 96 + (feederParts?.[1] === "s" ? 48 : 0) + feederIndex * 12;
     const personnel = createClubPersonnel(club.id, club.name, staffStart);
     club.staff ??= personnel.staff;
     club.board ??= personnel.board;
@@ -793,7 +850,7 @@ function clubPower(career: Career, clubId: string) {
     ? career.lineup.map((id) => career.players.find((player) => player.id === id)).filter((player): player is Player => Boolean(player && player.clubId === clubId))
     : clubPlayers.sort((a, b) => b.overall - a.overall).slice(0, 11);
   const average = selected.length ? selected.reduce((sum, player) => sum + player.overall + (player.morale - 60) * 0.035 + ((player.managerRapport ?? 58) - 50) * 0.025, 0) / selected.length : getClub(career, clubId).reputation * 0.78;
-  const relevantCoaches = (club.staff ?? []).filter((person) => ["Assistant Manager", "First-Team Coach", "Goalkeeping Coach", "Fitness Coach", "Performance Analyst"].includes(person.role));
+  const relevantCoaches = (club.staff ?? []).filter((person) => ["First-Team Manager", "Assistant Manager", "First-Team Coach", "Goalkeeping Coach", "Fitness Coach"].includes(person.role));
   const staffAverage = relevantCoaches.length ? relevantCoaches.reduce((sum, person) => sum + person.ability, 0) / relevantCoaches.length : 50;
   const backroomBonus = (staffAverage - 50) * 0.025;
   if (clubId !== career.clubId) return average + backroomBonus;
@@ -1018,11 +1075,12 @@ function playoffWinner(career: Career, leagueId: LeagueId, table: ReturnType<typ
 function makeRegionalEntrant(career: Career, leagueId: "national-north" | "national-south", season: number, index: number): { club: Club; players: Player[] } {
   const north = leagueId === "national-north";
   const bases = north
-    ? ["Mossfield", "Caldershaw", "Ashbank", "Rookfell", "Brackenby", "Fellbridge", "Kirkstead", "Greyhaven"]
-    : ["Fernleigh", "Cranmere", "Averton", "Hazelwick", "Elmstead", "Southmere", "Bellport", "Gorsefield"];
-  const city = bases[(season * 3 + index) % bases.length] + (season > 3 ? ` ${String.fromCharCode(65 + (season - 4) % 26)}` : "");
+    ? ["Mossfield", "Caldershaw", "Ashbank", "Rookfell", "Brackenby", "Fellbridge", "Kirkstead", "Greyhaven", "Linton Cross", "Burnethorpe", "Hartsfell", "Staveley Reach", "Keldmouth", "Wrenborough", "Whitwell", "Alder Beck"]
+    : ["Fernleigh", "Cranmere", "Averton", "Hazelwick", "Elmstead", "Southmere", "Bellport", "Gorsefield", "Duncombe", "Roselands", "Port Amber", "Willow Cross", "Marlin Quay", "Havenstow", "Mallow Down", "Briarby"];
+  const baseCity = bases[(season * 3 + index) % bases.length];
+  const city = season > 1 ? `${baseCity} ${["Ridge", "Cross", "Quay", "Down", "Gate", "Reach"][((season - 2) * 5 + index) % 6]}` : baseCity;
   const id = `feeder-${north ? "n" : "s"}-${season}-${index + 1}`;
-  const suffix = ["Athletic", "Town", "Rovers", "United"][((season + index) * 3) % 4];
+  const suffix = ["Athletic", "Town", "Rovers", "United", "City", "Albion", "Borough", "Wanderers", "County", "Harbour", "Rangers", "Vale", "Railway", "Phoenix"][((season + index) * 3) % 14];
   const name = `${city} ${suffix}`;
   const template = career.clubs.find((club) => club.leagueId === leagueId)!;
   const colors = [["#486b52", "#e9e0c6"], ["#9b483b", "#e7cb75"], ["#365f83", "#efe9dd"], ["#6c5682", "#ddd19f"]][(season + index) % 4] as [string, string];
@@ -1219,8 +1277,8 @@ export function beginNextSeason(career: Career): Career {
   next.pressPressure = Math.max(0, (next.pressPressure ?? 12) - 18);
   next.winlessRun = 0;
   if (next.kitCollectionSeason !== next.season) next.kitDesignReady = false;
-  next.fixtures = generateEnglishFixtures(next.season, next.clubs);
-  next.lineup = next.players.filter((player) => player.clubId === next.clubId && player.age >= 16).sort((a, b) => b.overall - a.overall).slice(0, 11).map((player) => player.id);
+  next.fixtures = generateCareerFixtures(next.season, next.clubs);
+  next.lineup = createStartingXI(next.players, next.clubId, next.formation);
   next.lastReport = null;
   const newLeague = getCurrentLeague(next);
   const clubMovement = newLeague.id === oldLeague.id ? "The club holds its place in the pyramid." : `${oldLeague.name} → ${newLeague.name} is confirmed.`;
@@ -1401,6 +1459,7 @@ function worldPlayerToPlayer(player: NonNullable<ReturnType<typeof getWorldPlaye
     clubId: player.clubId,
     trainingFocus: player.trainingFocus,
     nationality: player.nationality,
+    country: player.country,
     squadLevel: player.squadLevel,
     managerRapport: player.managerRapport,
     role: player.role,
@@ -1547,22 +1606,19 @@ export function applyForJob(career: Career, clubId: string) {
 }
 
 export function formatMoney(amount: number, compact = false) {
-  const absolute = Math.abs(amount);
-  const prefix = amount < 0 ? "−£" : "£";
-  if (compact && absolute >= 1_000_000) return `${prefix}${(absolute / 1_000_000).toFixed(1)}m`;
-  if (compact && absolute >= 100_000) return `${prefix}${(absolute / 1000).toFixed(0)}k`;
-  return `${prefix}${Math.round(absolute).toLocaleString("en-GB")}`;
+  return formatGameCurrency(amount, compact);
 }
 
 export function formatPlayerValue(amount: number) {
-  return amount >= 1_000_000 ? `£${(amount / 1_000_000).toFixed(1)}m` : amount >= 1000 ? `£${Math.round(amount / 1000)}k` : formatMoney(amount);
+  return formatMoney(amount, true);
 }
 
 export function getFormationSlots(formation: string) {
   return FORMATIONS[formation] ?? FORMATIONS["4-3-3"];
 }
 
-export const CLUB_OPTIONS = CLUB_SEEDS.map((club) => ({ id: club.short, name: club.name, city: club.city, region: club.region, leagueId: club.leagueId, leagueName: leagueDefinition(club.leagueId).name, reputation: club.reputation, colors: club.colors, capacity: club.capacity }));
+const INTERNATIONAL_CAREER_OPTIONS = WORLD_CLUB_SEEDS.map((club) => ({ ...club, leagueName: leagueDefinition(club.leagueId).name }));
+export const CLUB_OPTIONS = [...CLUB_SEEDS, ...INTERNATIONAL_CAREER_OPTIONS].map((club) => ({ id: club.short, name: club.name, city: club.city, country: club.country ?? "England", region: club.region, leagueId: club.leagueId, leagueName: leagueDefinition(club.leagueId).name, reputation: club.reputation, colors: club.colors, capacity: club.capacity }));
 export const FORMATION_OPTIONS = Object.keys(FORMATIONS);
 export const TRAINING_OPTIONS = ["Balanced", "Fundamentals", "Technical", "Tactical", "Physical", "Finishing", "Goalkeeping", "Rest"];
 export const ROOF_OPTIONS: Roof[] = ["Open sky", "Flat canopy", "Cantilever", "Continuous bowl"];

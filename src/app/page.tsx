@@ -8,6 +8,7 @@ import {
   BadgeCheck,
   Banknote,
   Building2,
+  Database,
   CalendarDays,
   Check,
   ChevronDown,
@@ -30,6 +31,7 @@ import {
   Search,
   Shield,
   Shirt,
+  Settings2,
   Sparkles,
   Star,
   Store,
@@ -85,20 +87,24 @@ import {
 import type { Career, Club, KitPattern, Player, PlayerAttributes, PlayerStats, Position, SquadLevel, SponsorSlot } from "@/lib/game";
 import { ENGLISH_LEAGUES } from "@/lib/league-pyramid";
 import type { LeagueId } from "@/lib/league-pyramid";
+import { WORLD_COUNTRIES, WORLD_LEAGUES } from "@/lib/world-leagues";
+import { DEFAULT_GAME_SETTINGS, GAME_SETTINGS_KEY, formatGameDate, formatGameTime, readGameSettings, type GameSettings } from "@/lib/game-settings";
 import { isSupabaseConfigured, loadLatestOnlineCareer, saveOnlineCareer, supabase } from "@/lib/supabase";
 import StadiumArchitect from "./stadium-architect";
 import StaffManagement from "./staff-management";
+import { PlayerPortrait } from "./player-portrait";
 import { ClubMark, ClubWordmark } from "./brand";
+import { DatabaseEditor, SettingsPanel } from "./game-tools";
 import { getWorldPlayerDetails, searchWorldDatabase, worldGroupCount, WORLD_PLAYER_COUNT, WORLD_PLAYER_COUNTRIES } from "@/lib/world-database";
 import type { WorldPlayerFilter, WorldPlayerListing } from "@/lib/world-database";
 
-type View = "overview" | "newsroom" | "squad" | "tactics" | "fixtures" | "table" | "transfers" | "people" | "stadium" | "finance" | "clubhouse" | "academy" | "commercial";
+type View = "overview" | "newsroom" | "squad" | "tactics" | "fixtures" | "table" | "transfers" | "people" | "stadium" | "finance" | "clubhouse" | "academy" | "commercial" | "editor" | "settings";
 
 const NAV_ITEMS: { id: View; label: string; icon: LucideIcon; section: string }[] = [
   { id: "overview", label: "Overview", icon: Home, section: "Club" },
   { id: "newsroom", label: "Newsroom", icon: Newspaper, section: "Club" },
-  { id: "squad", label: "Squad", icon: Users, section: "Club" },
-  { id: "tactics", label: "Tactics", icon: Activity, section: "Club" },
+  { id: "squad", label: "Squad", icon: Users, section: "Team" },
+  { id: "tactics", label: "Tactics", icon: Activity, section: "Team" },
   { id: "fixtures", label: "Fixtures", icon: CalendarDays, section: "Competition" },
   { id: "table", label: "League table", icon: Trophy, section: "Competition" },
   { id: "transfers", label: "Transfers", icon: RefreshCw, section: "Recruitment" },
@@ -108,11 +114,17 @@ const NAV_ITEMS: { id: View; label: string; icon: LucideIcon; section: string }[
   { id: "clubhouse", label: "Clubhouse", icon: Shirt, section: "Development" },
   { id: "academy", label: "Youth academy", icon: GraduationCap, section: "Development" },
   { id: "commercial", label: "Commercial", icon: Handshake, section: "Development" },
+  { id: "editor", label: "Editor", icon: Database, section: "Manager" },
+  { id: "settings", label: "Settings", icon: Settings2, section: "Manager" },
 ];
 
 const MONEY = (amount: number) => formatMoney(amount, true);
 const KIT_PATTERNS: KitPattern[] = ["Engineered Grid", "Topographic", "Pixel Fade", "Diagonal Motion", "Contour Lines", "Split Panel", "Shadow Gradient", "Micro Dot", "Clean Block"];
-const LEAGUE_SHORT_LABEL: Record<LeagueId, string> = { premier: "PREM", championship: "CHAMP", "league-one": "L1", "league-two": "L2", national: "NAT", "national-north": "NORTH", "national-south": "SOUTH" };
+const LEAGUE_SHORT_LABEL: Record<string, string> = { premier: "PREM", championship: "CHAMP", "league-one": "L1", "league-two": "L2", national: "NAT", "national-north": "NORTH", "national-south": "SOUTH" };
+
+function leagueShortLabel(id: string) {
+  return LEAGUE_SHORT_LABEL[id] ?? id.split("-").filter(Boolean).slice(0, 2).map((part) => part.slice(0, 4).toUpperCase()).join(" ");
+}
 
 function ClubCrest({ club, size = "normal" }: { club: Pick<Club, "shortName" | "colors"> & { badge?: Club["badge"] }; size?: "small" | "normal" | "large" }) {
   const badge = club.badge;
@@ -141,7 +153,7 @@ function ClubCrest({ club, size = "normal" }: { club: Pick<Club, "shortName" | "
 }
 
 function pageDate(date: string) {
-  return new Date(`${date}T12:00:00`).toLocaleDateString("en-GB", { weekday: "short", day: "2-digit", month: "short" });
+  return formatGameDate(date);
 }
 
 function getCurrentDate(career: Career) {
@@ -157,6 +169,44 @@ function getPos(n: number) {
   return `${n}th`;
 }
 
+function applyEditorDatabase(base: Career, draft: Career): Career {
+  const next = structuredClone(base);
+  const draftClubs = new Map(draft.clubs.map((club) => [club.id, club]));
+  for (const club of next.clubs) {
+    const edited = draftClubs.get(club.id);
+    if (!edited) continue;
+    club.name = edited.name;
+    club.shortName = edited.shortName;
+    club.city = edited.city;
+    club.country = edited.country;
+    club.region = edited.region;
+    club.reputation = edited.reputation;
+    club.targetPosition = edited.targetPosition;
+    club.colors = [...edited.colors];
+    club.balance = edited.balance;
+    club.transferBudget = edited.transferBudget;
+    club.wageBudget = edited.wageBudget;
+    club.debt = edited.debt;
+    club.bio = edited.bio;
+    club.stadium = { ...club.stadium, name: edited.stadium.name, capacity: edited.stadium.capacity };
+  }
+  const draftPlayers = new Map(draft.players.map((player) => [player.id, player]));
+  for (const player of next.players) {
+    const edited = draftPlayers.get(player.id);
+    if (!edited) continue;
+    player.name = edited.name;
+    player.age = edited.age;
+    player.nationality = edited.nationality;
+    player.position = edited.position;
+    player.overall = edited.overall;
+    player.potential = edited.potential;
+    player.wage = edited.wage;
+    player.contractYears = edited.contractYears;
+    player.value = edited.value;
+  }
+  return next;
+}
+
 function SectionHeading({ kicker, title, detail, action }: { kicker: string; title: string; detail?: string; action?: ReactNode }) {
   return <div className="section-heading"><div><p className="eyebrow">{kicker}</p><h1>{title}</h1>{detail && <p className="muted section-detail">{detail}</p>}</div>{action}</div>;
 }
@@ -168,11 +218,15 @@ function Metric({ icon: Icon, label, value, foot, accent = false }: { icon: Luci
 export default function TheClub() {
   const [ready, setReady] = useState(false);
   const [career, setCareer] = useState<Career | null>(null);
-  const [mode, setMode] = useState<"welcome" | "new" | "game">("welcome");
+  const [mode, setMode] = useState<"welcome" | "new" | "game" | "load" | "editor" | "settings">("welcome");
   const [view, setView] = useState<View>("overview");
   const [managerName, setManagerName] = useState("");
   const [selectedClub, setSelectedClub] = useState("WPR");
   const [selectedLeague, setSelectedLeague] = useState<LeagueId>("league-one");
+  const [selectedCountry, setSelectedCountry] = useState("England");
+  const [editorCareer, setEditorCareer] = useState<Career | null>(null);
+  const [settings, setSettings] = useState<GameSettings>(DEFAULT_GAME_SETTINGS);
+  const [loadError, setLoadError] = useState("");
   const [session, setSession] = useState<Session | null>(null);
   const [cloudReady, setCloudReady] = useState(false);
   const [syncLabel, setSyncLabel] = useState("Saved on this device");
@@ -186,11 +240,20 @@ export default function TheClub() {
     try {
       const stored = localStorage.getItem("the-club-career-v1");
       if (stored) setCareer(normalizeCareer(JSON.parse(stored) as Career));
+      setSettings(readGameSettings());
     } catch {
       localStorage.removeItem("the-club-career-v1");
     }
     setReady(true);
   }, []);
+
+  useEffect(() => {
+    if (ready) localStorage.setItem(GAME_SETTINGS_KEY, JSON.stringify(settings));
+  }, [ready, settings]);
+
+  useEffect(() => {
+    if (ready && editorCareer) localStorage.setItem("the-club-editor-draft-v1", JSON.stringify(editorCareer));
+  }, [ready, editorCareer]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -232,6 +295,10 @@ export default function TheClub() {
 
   useEffect(() => {
     if (!ready || !career) return;
+    if (!settings.autosave) {
+      setSyncLabel("Autosave off · save manually");
+      return;
+    }
     localStorage.setItem("the-club-career-v1", JSON.stringify(career));
     if (!session?.user.id) {
       setSyncLabel("Saved on this device");
@@ -244,10 +311,18 @@ export default function TheClub() {
       });
     }, 750);
     return () => window.clearTimeout(timeout);
-  }, [career, ready, session?.user.id, cloudReady]);
+  }, [career, ready, session?.user.id, cloudReady, settings.autosave]);
 
   const startNewCareer = () => {
-    const next = createCareer(managerName, selectedClub);
+    let next = createCareer(managerName, selectedClub);
+    let draft = editorCareer;
+    if (!draft) {
+      try {
+        const savedDraft = localStorage.getItem("the-club-editor-draft-v1");
+        if (savedDraft) draft = normalizeCareer(JSON.parse(savedDraft) as Career);
+      } catch { localStorage.removeItem("the-club-editor-draft-v1"); }
+    }
+    if (draft) next = applyEditorDatabase(next, draft);
     setCareer(next);
     setView("overview");
     setMode("game");
@@ -273,19 +348,66 @@ export default function TheClub() {
     setSyncLabel("Saved on this device");
   };
 
+  const openEditor = () => {
+    if (career) {
+      setView("editor");
+      setMode("game");
+      return;
+    }
+    try {
+      const saved = localStorage.getItem("the-club-editor-draft-v1");
+      setEditorCareer(saved ? normalizeCareer(JSON.parse(saved) as Career) : createCareer("Database Editor", selectedClub));
+    } catch {
+      setEditorCareer(createCareer("Database Editor", selectedClub));
+    }
+    setMode("editor");
+  };
+
+  const importCareer = async (file?: File) => {
+    if (!file) return;
+    try {
+      const imported = normalizeCareer(JSON.parse(await file.text()) as Career);
+      setCareer(imported);
+      setMode("game");
+      setView("overview");
+      setLoadError("");
+    } catch {
+      setLoadError("That file is not a valid The Club career save.");
+    }
+  };
+
+  const saveCareerManually = async () => {
+    if (!career) return;
+    localStorage.setItem("the-club-career-v1", JSON.stringify(career));
+    if (session?.user.id) {
+      try {
+        await saveOnlineCareer(session.user.id, career);
+        setSyncLabel("Saved to your account");
+      } catch (error) {
+        setSyncLabel(error instanceof Error ? `Save failed · ${error.message}` : "Cloud save failed");
+      }
+    } else setSyncLabel("Saved on this device");
+  };
+
   if (!ready) return <div className="boot-screen"><ClubMark size={48} /><span>Setting the touchline…</span></div>;
   if (mode !== "game" || !career) {
     return (
       <div className="start-screen">
         <div className="start-top"><div className="wordmark"><ClubMark size={31} /><ClubWordmark /></div><button className="button button-quiet" onClick={() => setAuthOpen(true)}><Cloud size={16} /> {session ? session.user.email : "Cloud saves"}</button></div>
         <div className="start-layout">
-          <div className="start-copy"><div className="live-pill"><span /> A CLUB IS BUILT EVERY DAY</div><h1>Football is a game.<br /><em>Building a club</em> is everything.</h1><p>Pick your ground. Build a squad. Put your name on a season that belongs to you.</p><div className="start-proof"><div><strong>164</strong><span>English clubs</span></div><div><strong>7</strong><span>national divisions</span></div><div><strong>∞</strong><span>seasons to build</span></div></div><div className="start-stadium-glow" /></div>
+          <div className="start-copy"><div className="live-pill"><span /> A CLUB IS BUILT EVERY DAY</div><h1>Football is a game.<br /><em>Building a club</em> is everything.</h1><p>Pick your ground. Build a squad. Put your name on a season that belongs to you.</p><div className="start-proof"><div><strong>{CLUB_OPTIONS.length.toLocaleString("en-GB")}</strong><span>clubs across the world</span></div><div><strong>{WORLD_PLAYER_COUNTRIES.length}</strong><span>countries · six continents</span></div><div><strong>∞</strong><span>seasons to build</span></div></div><div className="start-stadium-glow" /></div>
           {mode === "welcome" && career ? (
-            <section className="welcome-card"><p className="eyebrow">YOUR CAREER IS READY</p><h2>Welcome back, {career.manager}</h2><div className="welcome-club"><ClubCrest club={getClub(career)} size="large" /><div><strong>{getClub(career).name}</strong><span>{getCurrentLeague(career).name} · Season {career.season}</span></div></div><button className="button button-primary button-wide" onClick={() => setMode("game")}>Continue career</button><button className="button button-secondary button-wide" onClick={() => { if (window.confirm("Start a new career? Your current save will remain available in this browser.")) setMode("new"); }}>Start a new career</button><div className="local-save-note"><Save size={14} /> {syncLabel}</div></section>
+            <section className="welcome-card"><p className="eyebrow">YOUR CAREER IS READY</p><h2>Welcome back, {career.manager}</h2><div className="welcome-club"><ClubCrest club={getClub(career)} size="large" /><div><strong>{getClub(career).name}</strong><span>{getCurrentLeague(career).name} · Season {career.season}</span></div></div><button className="button button-primary button-wide" onClick={() => setMode("game")}>Continue career</button><button className="button button-secondary button-wide" onClick={() => { setLoadError(""); setMode("load"); }}>Load career</button><button className="button button-secondary button-wide" onClick={() => { if (window.confirm("Start a new career? Your current save will remain available in this browser.")) setMode("new"); }}>New career</button><button className="button button-secondary button-wide" onClick={openEditor}>Editor</button><button className="button button-secondary button-wide" onClick={() => setMode("settings")}>Settings</button><div className="local-save-note"><Save size={14} /> {syncLabel}</div></section>
           ) : mode === "new" ? (
-            <section className="setup-card"><div className="setup-heading"><span className="step-count">01</span><div><p className="eyebrow">NEW CAREER</p><h2>Choose your club</h2></div></div><label className="field-label" htmlFor="manager-name">Manager name</label><input id="manager-name" className="text-input" maxLength={28} placeholder="e.g. Jamie Taylor" value={managerName} onChange={(event) => setManagerName(event.target.value)} /><label className="field-label" htmlFor="career-league">League</label><select id="career-league" className="field-select" value={selectedLeague} onChange={(event) => { const leagueId = event.target.value as LeagueId; setSelectedLeague(leagueId); const firstClub = CLUB_OPTIONS.find((club) => club.leagueId === leagueId); if (firstClub) setSelectedClub(firstClub.id); }}>{ENGLISH_LEAGUES.map((league) => <option key={league.id} value={league.id}>{league.name} · {league.clubs} clubs</option>)}</select><div className="club-picker-heading"><span>{ENGLISH_LEAGUES.find((league) => league.id === selectedLeague)?.name} · England</span><span>{CLUB_OPTIONS.filter((club) => club.leagueId === selectedLeague).length} clubs</span></div><div className="club-picker">{CLUB_OPTIONS.filter((club) => club.leagueId === selectedLeague).map((club) => <button key={club.id} onClick={() => setSelectedClub(club.id)} className={`club-choice ${selectedClub === club.id ? "selected" : ""}`}><ClubCrest club={{ shortName: club.id, colors: club.colors }} size="small" /><span><strong>{club.name}</strong><small>{club.city} · {club.region} · {club.capacity.toLocaleString("en-GB")}</small></span>{selectedClub === club.id && <Check size={16} className="choice-check" />}</button>)}</div><button className="button button-primary button-wide start-career" onClick={startNewCareer}>Begin your career <Sparkles size={16} /></button><button className="button button-quiet button-wide" onClick={() => setMode(career ? "welcome" : "new")}>Back</button></section>
+            <section className="setup-card"><div className="setup-heading"><span className="step-count">01</span><div><p className="eyebrow">NEW CAREER</p><h2>Choose your club</h2></div></div><label className="field-label" htmlFor="manager-name">Manager name</label><input id="manager-name" className="text-input" maxLength={28} placeholder="e.g. Jamie Taylor" value={managerName} onChange={(event) => setManagerName(event.target.value)} /><label className="field-label" htmlFor="career-country">Country</label><select id="career-country" className="field-select" value={selectedCountry} onChange={(event) => { const country = event.target.value; setSelectedCountry(country); const leagues = country === "England" ? ENGLISH_LEAGUES : WORLD_LEAGUES.filter((league) => league.country === country); const nextLeague = leagues[0]; if (nextLeague) { setSelectedLeague(nextLeague.id); const firstClub = CLUB_OPTIONS.find((club) => club.leagueId === nextLeague.id); if (firstClub) setSelectedClub(firstClub.id); } }}>{WORLD_PLAYER_COUNTRIES.map((country) => <option key={country}>{country}</option>)}</select><label className="field-label" htmlFor="career-league">League</label><select id="career-league" className="field-select" value={selectedLeague} onChange={(event) => { const leagueId = event.target.value as LeagueId; setSelectedLeague(leagueId); const firstClub = CLUB_OPTIONS.find((club) => club.leagueId === leagueId); if (firstClub) setSelectedClub(firstClub.id); }}>{(selectedCountry === "England" ? ENGLISH_LEAGUES : WORLD_LEAGUES.filter((league) => league.country === selectedCountry)).map((league) => <option key={league.id} value={league.id}>{league.name} · {league.clubs} clubs</option>)}</select><div className="club-picker-heading"><span>{(selectedCountry === "England" ? ENGLISH_LEAGUES : WORLD_LEAGUES.filter((league) => league.country === selectedCountry)).find((league) => league.id === selectedLeague)?.name} · {selectedCountry}</span><span>{CLUB_OPTIONS.filter((club) => club.leagueId === selectedLeague).length} clubs</span></div><div className="club-picker">{CLUB_OPTIONS.filter((club) => club.leagueId === selectedLeague).map((club) => <button key={club.id} onClick={() => setSelectedClub(club.id)} className={`club-choice ${selectedClub === club.id ? "selected" : ""}`}><ClubCrest club={{ shortName: club.id, colors: club.colors }} size="small" /><span><strong>{club.name}</strong><small>{club.city} · {club.region} · {club.capacity.toLocaleString("en-GB")}</small></span>{selectedClub === club.id && <Check size={16} className="choice-check" />}</button>)}</div><button className="button button-primary button-wide start-career" onClick={startNewCareer}>Begin your career <Sparkles size={16} /></button><button className="button button-quiet button-wide" onClick={() => setMode(career ? "welcome" : "welcome")}>Back</button></section>
+          ) : mode === "load" ? (
+            <section className="setup-card"><div className="setup-heading"><span className="step-count"><Save size={17} /></span><div><p className="eyebrow">LOAD CAREER</p><h2>Return to a save</h2></div></div>{career ? <div className="welcome-club"><ClubCrest club={getClub(career)} size="large" /><div><strong>{getClub(career).name}</strong><span>{career.manager} · Season {career.season} · {syncLabel}</span></div></div> : <p className="setup-intro">No career is saved in this browser yet. Import a career file to continue on this device.</p>}{career && <button className="button button-primary button-wide" onClick={() => setMode("game")}>Load saved career</button>}<label className="button button-secondary button-wide import-career-button">Import career file<input type="file" accept="application/json,.json" onChange={(event) => { void importCareer(event.target.files?.[0]); }} /></label>{loadError && <p className="form-error">{loadError}</p>}<button className="button button-quiet button-wide" onClick={() => setMode("welcome")}>Back</button></section>
+          ) : mode === "editor" && editorCareer ? (
+            <div className="landing-tool-panel"><DatabaseEditor career={editorCareer} setCareer={setEditorCareer} onBack={() => setMode("welcome")} startFromEditor /></div>
+          ) : mode === "settings" ? (
+            <div className="landing-tool-panel"><SettingsPanel settings={settings} onChange={setSettings} onBack={() => setMode("welcome")} /></div>
           ) : (
-            <section className="setup-card welcome-first"><div className="setup-heading"><span className="step-count"><Flag size={17} /></span><div><p className="eyebrow">A NEW CHAPTER</p><h2>Take the chair</h2></div></div><p className="setup-intro">The board has a plan. The supporters have hope. Start with a club and give them a season to remember.</p><button className="button button-primary button-wide" onClick={() => setMode("new")}>New career <Plus size={16} /></button><button className="button button-quiet button-wide" onClick={() => setAuthOpen(true)}><Cloud size={16} /> Set up cloud saves</button><p className="local-note">Careers save automatically in this browser.</p></section>
+            <section className="setup-card welcome-first"><div className="setup-heading"><span className="step-count"><Flag size={17} /></span><div><p className="eyebrow">A NEW CHAPTER</p><h2>Take the chair</h2></div></div><p className="setup-intro">The board has a plan. The supporters have hope. Start with a club and give them a season to remember.</p><button className="button button-primary button-wide" onClick={() => setMode("new")}>New career <Plus size={16} /></button><button className="button button-secondary button-wide" onClick={() => { setLoadError(""); setMode("load"); }}>Load career <Save size={15} /></button><button className="button button-secondary button-wide" onClick={openEditor}>Editor <Database size={15} /></button><button className="button button-secondary button-wide" onClick={() => setMode("settings")}>Settings <Settings2 size={15} /></button><button className="button button-quiet button-wide" onClick={() => setAuthOpen(true)}><Cloud size={16} /> Set up cloud saves</button><p className="local-note">Careers save automatically in this browser.</p></section>
           )}
         </div>
         <div className="start-footer"><span>EST. 2026</span><span>THE GAME BELONGS TO YOU</span><span>PLAY AT YOUR PACE</span></div>
@@ -294,7 +416,7 @@ export default function TheClub() {
     );
   }
 
-  return <CareerLayout career={career} setCareer={setCareer} view={view} setView={setView} session={session} syncLabel={syncLabel} onCloud={() => setAuthOpen(true)} authOpen={authOpen} setAuthOpen={setAuthOpen} authEmail={authEmail} setAuthEmail={setAuthEmail} authMessage={authMessage} setAuthMessage={setAuthMessage} onMagicLink={handleMagicLink} onSignOut={signOut} mobileNav={mobileNav} setMobileNav={setMobileNav} navSearch={navSearch} setNavSearch={setNavSearch} />;
+  return <CareerLayout career={career} setCareer={setCareer} view={view} setView={setView} session={session} syncLabel={syncLabel} settings={settings} onSettingsChange={setSettings} onManualSave={saveCareerManually} onCloud={() => setAuthOpen(true)} authOpen={authOpen} setAuthOpen={setAuthOpen} authEmail={authEmail} setAuthEmail={setAuthEmail} authMessage={authMessage} setAuthMessage={setAuthMessage} onMagicLink={handleMagicLink} onSignOut={signOut} mobileNav={mobileNav} setMobileNav={setMobileNav} navSearch={navSearch} setNavSearch={setNavSearch} />;
 }
 
 function CloudModal({ session, email, setEmail, message, setMessage, onClose, onSubmit, onSignOut }: {
@@ -303,10 +425,13 @@ function CloudModal({ session, email, setEmail, message, setMessage, onClose, on
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="modal-card auth-modal"><button className="modal-close" aria-label="Close" onClick={onClose}><X size={18} /></button><div className="modal-icon"><Cloud size={20} /></div><p className="eyebrow">CAREER BACKUP</p><h2>{session ? "Cloud save connected" : "Take your career anywhere"}</h2>{session ? <><p>Your careers are syncing to {session.user.email}. They’ll be ready when you return on another device.</p><div className="cloud-state"><BadgeCheck size={16} /> Cloud sync active</div><div className="modal-actions"><button className="button button-secondary" onClick={onSignOut}>Sign out</button><button className="button button-primary" onClick={onClose}>Done</button></div></> : isSupabaseConfigured ? <form onSubmit={onSubmit}><p>We’ll send a one-time sign-in link. Your career stays private to your account.</p><label className="field-label" htmlFor="cloud-email">Email address</label><input id="cloud-email" className="text-input" type="email" autoComplete="email" value={email} onChange={(event) => { setEmail(event.target.value); setMessage(""); }} placeholder="you@example.com" required /><button className="button button-primary button-wide modal-submit" type="submit"><Mail size={15} /> Send sign-in link</button>{message && <p className="form-message">{message}</p>}</form> : <><p>Cloud saves need a Supabase project and its public connection keys. Until that is connected, your career is saved on this browser and can be continued here.</p><div className="setup-note"><span className="note-icon"><Lightbulb size={15} /></span><span>Set <code>NEXT_PUBLIC_SUPABASE_URL</code> and <code>NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY</code> after the project is connected.</span></div><p className="muted">Never add a Supabase secret key to the browser app.</p><button className="button button-primary button-wide" onClick={onClose}>Got it</button></>}</section></div>;
 }
 
-function CareerLayout({ career, setCareer, view, setView, session, syncLabel, onCloud, authOpen, setAuthOpen, authEmail, setAuthEmail, authMessage, setAuthMessage, onMagicLink, onSignOut, mobileNav, setMobileNav, navSearch, setNavSearch }: {
-  career: Career; setCareer: (career: Career) => void; view: View; setView: (view: View) => void; session: Session | null; syncLabel: string; onCloud: () => void; authOpen: boolean; setAuthOpen: (open: boolean) => void; authEmail: string; setAuthEmail: (email: string) => void; authMessage: string; setAuthMessage: (message: string) => void; onMagicLink: (event: FormEvent<HTMLFormElement>) => void; onSignOut: () => void; mobileNav: boolean; setMobileNav: (open: boolean) => void; navSearch: string; setNavSearch: (search: string) => void;
+function CareerLayout({ career, setCareer, view, setView, session, syncLabel, settings, onSettingsChange, onManualSave, onCloud, authOpen, setAuthOpen, authEmail, setAuthEmail, authMessage, setAuthMessage, onMagicLink, onSignOut, mobileNav, setMobileNav, navSearch, setNavSearch }: {
+  career: Career; setCareer: (career: Career) => void; view: View; setView: (view: View) => void; session: Session | null; syncLabel: string; settings: GameSettings; onSettingsChange: (settings: GameSettings) => void; onManualSave: () => void; onCloud: () => void; authOpen: boolean; setAuthOpen: (open: boolean) => void; authEmail: string; setAuthEmail: (email: string) => void; authMessage: string; setAuthMessage: (message: string) => void; onMagicLink: (event: FormEvent<HTMLFormElement>) => void; onSignOut: () => void; mobileNav: boolean; setMobileNav: (open: boolean) => void; navSearch: string; setNavSearch: (search: string) => void;
 }) {
   handleCareerNavigation(setView);
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [view]);
   useEffect(() => {
     const shortcut = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
@@ -324,8 +449,8 @@ function CareerLayout({ career, setCareer, view, setView, session, syncLabel, on
   const profileReport = profilePlayerId ? getScoutingReport(career, profilePlayerId) : null;
   const filteredNav = NAV_ITEMS.filter((item) => item.label.toLowerCase().includes(navSearch.toLowerCase()));
   const activeTitle = NAV_ITEMS.find((item) => item.id === view)?.label ?? "Overview";
-  const seasonEnd = career.round > getSeasonWeekCount();
   const activeLeague = getCurrentLeague(career);
+  const seasonEnd = career.round > activeLeague.rounds;
   const nextAction = () => setCareer(seasonEnd ? beginNextSeason(career) : playMatchday(career));
 
   return <div className="app-shell">
@@ -334,7 +459,7 @@ function CareerLayout({ career, setCareer, view, setView, session, syncLabel, on
       <div className="sidebar-brand"><ClubMark size={29} /><ClubWordmark compact /><button className="mobile-close" aria-label="Close menu" onClick={() => setMobileNav(false)}><X size={19} /></button></div>
       <button className="club-selector" onClick={() => setView("overview")}><ClubCrest club={club} size="small" /><span className="club-selector-copy"><strong>{club.name}</strong><small>{activeLeague.name} · {2026 + career.season - 1}/{String(2027 + career.season - 1).slice(-2)}</small></span><ChevronDown size={15} /></button>
       <div className="nav-search-wrap"><Search size={15} /><input aria-label="Find a section" value={navSearch} onChange={(event) => setNavSearch(event.target.value)} placeholder="Find a section" /><kbd>⌘ K</kbd></div>
-      <nav className="main-nav">{["Club", "Competition", "Recruitment", "Development"].map((section) => {
+      <nav className="main-nav">{["Club", "Team", "Competition", "Recruitment", "Development", "Manager"].map((section) => {
         const links = filteredNav.filter((item) => item.section === section);
         if (!links.length) return null;
         return <div className="nav-group" key={section}><p className="nav-label">{section}</p>{links.map(({ id, label, icon: Icon }) => <button key={id} className={`nav-link ${view === id ? "active" : ""}`} onClick={() => { setView(id); setMobileNav(false); }}><Icon size={17} strokeWidth={1.7} /><span>{label}</span>{id === "stadium" && <span className="nav-badge">NEW</span>}</button>)}</div>;
@@ -342,13 +467,12 @@ function CareerLayout({ career, setCareer, view, setView, session, syncLabel, on
       <div className="sidebar-bottom"><div className="club-trust"><div className="trust-header"><span>Board confidence</span><strong>{club.boardTrust}%</strong></div><div className="progress-track"><span style={{ width: `${club.boardTrust}%` }} /></div><small>{club.boardTrust >= 60 ? "The board is behind you" : club.boardTrust >= 35 ? "Results are being watched" : "Your position is at risk"}</small></div><button className="user-row" onClick={onCloud}><span className="user-avatar">{career.manager.split(" ").map((word) => word[0]).slice(0, 2).join("").toUpperCase()}</span><span className="user-copy"><strong>{career.manager}</strong><small>{session ? "Cloud connected" : "Local career"}</small></span><ChevronDown size={14} /></button></div>
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="topbar-left"><button className="menu-toggle" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><div className="top-crumb"><span>MY CLUB</span><b>/</b><strong>{activeTitle}</strong></div></div><div className="topbar-right"><div className="round-indicator"><CalendarDays size={15} /><span>{seasonEnd ? "Season complete" : career.round > activeLeague.rounds ? `World week ${career.round} / ${getSeasonWeekCount()}` : `Round ${career.round} / ${activeLeague.rounds}`}</span></div><div className="top-divider" /><div className="save-indicator" title={syncLabel}><span className={session ? "save-dot online" : "save-dot"} /><span>{session ? "Cloud saved" : "Auto-saved"}</span></div><button className="button button-primary advance-button" onClick={nextAction} disabled={career.unemployed}>{seasonEnd ? "Start pre-season" : career.round > activeLeague.rounds ? "Advance world week" : "Advance to matchday"}<Clock3 size={15} /></button></div></header>
+      <header className="topbar"><div className="topbar-left"><button className="menu-toggle" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={20} /></button><div className="top-crumb"><span>MY CLUB</span><b>/</b><strong>{activeTitle}</strong></div></div><div className="topbar-right"><div className="round-indicator"><CalendarDays size={15} /><span>{seasonEnd ? "Season complete" : `Round ${career.round} / ${activeLeague.rounds}`}</span></div><div className="top-divider" /><div className="save-indicator" title={syncLabel}><span className={session ? "save-dot online" : "save-dot"} /><span>{settings.autosave ? session ? "Cloud saved" : "Auto-saved" : "Unsaved changes"}</span></div><button className="button button-primary advance-button" onClick={nextAction} disabled={career.unemployed}>{seasonEnd ? "Start pre-season" : "Advance to matchday"}<Clock3 size={15} /></button></div></header>
       <main className="content-area">
         {career.unemployed && <JobSearch career={career} setCareer={setCareer} />}
         {!career.unemployed && view === "overview" && <Overview career={career} setCareer={setCareer} onAdvance={nextAction} seasonEnd={seasonEnd} />}
         {view === "newsroom" && <Newsroom career={career} setView={setView} />}
-        {view === "squad" && <Squad career={career} setCareer={setCareer} onPlayerProfile={setProfilePlayerId} />}
-        {view === "tactics" && <Tactics career={career} setCareer={setCareer} />}
+        {(view === "squad" || view === "tactics") && <SquadTacticsArea career={career} setCareer={setCareer} onPlayerProfile={setProfilePlayerId} view={view} setView={setView} />}
         {view === "fixtures" && <Fixtures career={career} setCareer={setCareer} onAdvance={nextAction} seasonEnd={seasonEnd} />}
         {view === "table" && <LeagueTable career={career} />}
         {view === "transfers" && <Transfers career={career} setCareer={setCareer} onPlayerProfile={setProfilePlayerId} />}
@@ -358,8 +482,10 @@ function CareerLayout({ career, setCareer, view, setView, session, syncLabel, on
         {view === "clubhouse" && <Clubhouse career={career} setCareer={setCareer} />}
         {view === "academy" && <Academy career={career} setCareer={setCareer} onPlayerProfile={setProfilePlayerId} />}
         {view === "commercial" && <Commercial career={career} setCareer={setCareer} />}
+        {view === "editor" && <DatabaseEditor career={career} setCareer={setCareer} onBack={() => setView("overview")} />}
+        {view === "settings" && <SettingsPanel settings={settings} onChange={onSettingsChange} inCareer onBack={() => setView("overview")} />}
       </main>
-      <footer className="app-footer"><span><span className="footer-mark" /> THE CLUB · SEASON {career.season}</span><button className="footer-save" onClick={onCloud}><Cloud size={14} /> {syncLabel}</button></footer>
+      <footer className="app-footer"><span><span className="footer-mark" /> THE CLUB · SEASON {career.season}</span><div className="footer-actions"><button className="footer-save" onClick={onManualSave}><Save size={14} /> Save career</button><button className="footer-save" onClick={onCloud}><Cloud size={14} /> {session ? "Cloud account" : "Cloud saves"}</button></div></footer>
     </div>
     {authOpen && <CloudModal session={session} email={authEmail} setEmail={setAuthEmail} message={authMessage} setMessage={setAuthMessage} onClose={() => setAuthOpen(false)} onSubmit={onMagicLink} onSignOut={onSignOut} />}
     {profilePlayer && <PlayerProfile player={profilePlayer} report={profileReport} known={!profilePlayerId?.startsWith("world-") || Boolean(profileReport)} onClose={() => setProfilePlayerId(null)} />}
@@ -383,7 +509,7 @@ function Overview({ career, setCareer, onAdvance, seasonEnd }: { career: Career;
     <SectionHeading kicker={getCurrentDate(career).toUpperCase()} title={`Good morning, ${career.manager.split(" ")[0]}`} detail={`${club.name} · ${league.name} · ${2026 + career.season - 1}/${String(2027 + career.season - 1).slice(-2)}`} action={<button className="button button-secondary" onClick={() => { setCareer(sponsorProposal(career)); document.dispatchEvent(new CustomEvent("the-club-view", { detail: "finance" })); }}><Megaphone size={15} /> Commercial meeting</button>} />
     <div className="metrics-grid"><Metric icon={Trophy} label="League position" value={getPos(rank)} foot={`${currentRow.points} points · ${currentRow.played} played`} accent /><Metric icon={Banknote} label="Club balance" value={MONEY(club.balance)} foot={`${MONEY(club.transferBudget)} transfer budget`} /><Metric icon={Shield} label="Board confidence" value={`${club.boardTrust}%`} foot={club.boardTrust >= 60 ? "Secure" : "Under review"} /><Metric icon={Users} label="Supporter confidence" value={`${club.supporterConfidence}%`} foot="Season average" /></div>
     <section className={`pressure-panel ${career.pressure! >= 70 ? "pressure-high" : ""}`}><div className="pressure-copy"><div><p className="eyebrow">PRESSURE FACTORS</p><strong>Managerial pressure</strong><small>Results, press coverage, supporter confidence, player rapport and the club target all shape this measure.</small></div><b>{(career.pressure ?? 18).toFixed(1)}<span> / 100</span></b></div><div className="pressure-meter" role="meter" aria-label="Managerial pressure" aria-valuemin={0} aria-valuemax={100} aria-valuenow={career.pressure ?? 18}><i style={{ width: `${career.pressure ?? 18}%` }} /></div><div className="pressure-signals"><span>FORM <b>+{pressureSignals.form.toFixed(1)}</b></span><span>PRESS <b>+{(pressureSignals.press * 0.62).toFixed(1)}</b></span><span>SUPPORTERS <b>+{(pressureSignals.supporters * 0.65).toFixed(1)}</b></span><span>PLAYERS <b>+{(pressureSignals.players * 0.7).toFixed(1)}</b></span><span>BOARD TARGET <b>+{(pressureSignals.expectations * 0.8).toFixed(1)}</b></span></div><div className="pressure-foot"><span>Current run without a win <strong>{career.winlessRun ?? 0} match{(career.winlessRun ?? 0) === 1 ? "" : "es"}</strong></span><span>{pressureSignals.averageRapport}% average rapport · supporters {club.supporterConfidence}%</span></div></section>
-    <div className="overview-grid"><section className="next-match-card"><div className="match-topline"><div className="match-label"><span className="match-live-dot" /> NEXT MATCH</div><span>{seasonEnd ? "PRE-SEASON" : career.round > league.rounds ? "WORLD WEEK " + career.round : league.name.toUpperCase() + " · ROUND " + career.round}</span></div>{nextFixture && homeClub && awayClub ? <><div className="match-date">{pageDate(nextFixture.date)} <span>·</span> 15:00 <span>·</span> {nextFixture.homeClubId === career.clubId ? "Home" : "Away"}</div><div className="match-sides"><div className="match-team"><ClubCrest club={homeClub} size="large" /><strong>{homeClub.name}</strong><small>HOME</small></div><div className="match-vs"><span>VS</span><i /></div><div className="match-team"><ClubCrest club={awayClub} size="large" /><strong>{awayClub.name}</strong><small>AWAY</small></div></div><div className="match-bottom"><span><MapPin size={14} /> {nextFixture.homeClubId === career.clubId ? club.stadium.name : awayClub.city}</span><button className="button button-primary" onClick={onAdvance}>Play matchday <Flag size={15} /></button></div></> : seasonEnd ? <div className="season-end-card"><div className="season-end-icon"><Trophy size={22} /></div><div><strong>That’s the season</strong><p>Take a look back, then prepare your squad for a new campaign.</p></div><button className="button button-primary" onClick={onAdvance}>Start next season <RefreshCw size={15} /></button></div> : <div className="world-rest-card"><span className="eyebrow">WORLD WEEK {career.round} OF {getSeasonWeekCount()}</span><strong>No league fixture this week</strong><p>Your {league.name} season is complete; the other divisions are finishing their campaign.</p><button className="button button-secondary" onClick={onAdvance}>Advance the world <Clock3 size={15} /></button></div>}{career.lastReport && !reportDismissed && <div className="match-report"><div className="report-icon"><Newspaper size={15} /></div><div><small>MATCH REPORT · {career.lastReport.result}</small><strong>{career.lastReport.headline}</strong><span>{career.lastReport.notes[0]}</span></div><button aria-label="Dismiss report" onClick={() => setReportDismissed(true)}><X size={15} /></button></div>}</section>
+    <div className="overview-grid"><section className="next-match-card"><div className="match-topline"><div className="match-label"><span className="match-live-dot" /> NEXT MATCH</div><span>{seasonEnd ? "PRE-SEASON" : career.round > league.rounds ? "WORLD WEEK " + career.round : league.name.toUpperCase() + " · ROUND " + career.round}</span></div>{nextFixture && homeClub && awayClub ? <><div className="match-date">{pageDate(nextFixture.date)} <span>·</span> {formatGameTime(15)} <span>·</span> {nextFixture.homeClubId === career.clubId ? "Home" : "Away"}</div><div className="match-sides"><div className="match-team"><ClubCrest club={homeClub} size="large" /><strong>{homeClub.name}</strong><small>HOME</small></div><div className="match-vs"><span>VS</span><i /></div><div className="match-team"><ClubCrest club={awayClub} size="large" /><strong>{awayClub.name}</strong><small>AWAY</small></div></div><div className="match-bottom"><span><MapPin size={14} /> {nextFixture.homeClubId === career.clubId ? club.stadium.name : awayClub.city}</span><button className="button button-primary" onClick={onAdvance}>Play matchday <Flag size={15} /></button></div></> : seasonEnd ? <div className="season-end-card"><div className="season-end-icon"><Trophy size={22} /></div><div><strong>That’s the season</strong><p>Take a look back, then prepare your squad for a new campaign.</p></div><button className="button button-primary" onClick={onAdvance}>Start next season <RefreshCw size={15} /></button></div> : <div className="world-rest-card"><span className="eyebrow">WORLD WEEK {career.round} OF {getSeasonWeekCount()}</span><strong>No league fixture this week</strong><p>Your {league.name} season is complete; the other divisions are finishing their campaign.</p><button className="button button-secondary" onClick={onAdvance}>Advance the world <Clock3 size={15} /></button></div>}{career.lastReport && !reportDismissed && <div className="match-report"><div className="report-icon"><Newspaper size={15} /></div><div><small>MATCH REPORT · {career.lastReport.result}</small><strong>{career.lastReport.headline}</strong><span>{career.lastReport.notes[0]}</span></div><button aria-label="Dismiss report" onClick={() => setReportDismissed(true)}><X size={15} /></button></div>}</section>
       <section className="table-card"><div className="card-heading"><div><p className="eyebrow">THE RUN-IN</p><h2>League table</h2></div><button className="text-button" onClick={() => document.dispatchEvent(new CustomEvent("the-club-view", { detail: "table" }))}>Full table</button></div><div className="mini-table-head"><span>#</span><span>Club</span><span>P</span><span>GD</span><span>Pts</span></div><div className="mini-table-body">{table.filter((row) => row.clubId !== career.clubId).slice(0, 4).map((row) => { const position = table.findIndex((entry) => entry.clubId === row.clubId) + 1; return <div key={row.clubId} className="mini-table-row"><span className="table-rank">{position}</span><span className="mini-club-name"><ClubCrest club={getClub(career, row.clubId)} size="small" />{row.club}</span><span>{row.played}</span><span className={row.goalsFor - row.goalsAgainst < 0 ? "negative" : ""}>{row.goalsFor - row.goalsAgainst > 0 ? "+" : ""}{row.goalsFor - row.goalsAgainst}</span><strong>{row.points}</strong></div>; })}</div><div className="table-cutline"><span>YOUR CLUB</span><i /></div><div className="mini-table-row current-last current"><span className="table-rank">{rank}</span><span className="mini-club-name"><ClubCrest club={club} size="small" />{club.name}</span><span>{currentRow.played}</span><span>{currentRow.goalsFor - currentRow.goalsAgainst > 0 ? "+" : ""}{currentRow.goalsFor - currentRow.goalsAgainst}</span><strong>{currentRow.points}</strong></div></section></div>
     <div className="lower-grid"><section className="news-card"><div className="card-heading"><div><p className="eyebrow">AROUND THE GROUND</p><h2>Club news</h2></div><button className="text-button" onClick={() => document.dispatchEvent(new CustomEvent("the-club-view", { detail: "newsroom" }))}>Open newsroom</button></div><div className="news-list">{recentNews.map((news) => <article key={news.id} className="news-item"><span className={`news-type type-${news.type}`}>{news.type === "match" ? <Flag size={15} /> : news.type === "stadium" ? <Building2 size={15} /> : news.type === "transfer" ? <RefreshCw size={15} /> : <Megaphone size={15} />}</span><div><small>{news.date} · {news.type.toUpperCase()}</small><strong>{news.headline}</strong><p>{news.body}</p></div></article>)}</div></section><section className="club-focus-card"><div className="card-heading"><div><p className="eyebrow">A CLUB WORTH BUILDING</p><h2>On and off the pitch</h2></div><Sparkles size={17} /></div><div className="focus-row"><span className="focus-icon"><Building2 size={16} /></span><div><strong>{club.stadium.name}</strong><small>{club.stadium.capacity.toLocaleString("en-GB")} capacity · {club.stadium.tiers} tier{club.stadium.tiers === 1 ? "" : "s"}</small></div><button className="focus-open" onClick={() => document.dispatchEvent(new CustomEvent("the-club-view", { detail: "stadium" }))}>Design</button></div><div className="focus-row"><span className="focus-icon"><Store size={16} /></span><div><strong>{club.sponsor}</strong><small>{MONEY(club.sponsorAnnual)} annual sponsor</small></div><button className="focus-open" onClick={() => { setCareer(sponsorProposal(career)); document.dispatchEvent(new CustomEvent("the-club-view", { detail: "finance" })); }}>Negotiate</button></div><div className="target-box"><span className="target-icon"><TargetIcon /></span><div><small>BOARD SEASON TARGET</small><strong>Finish in the top {club.targetPosition}</strong></div><span className={`target-status ${rank <= club.targetPosition ? "on-target" : "off-target"}`}>{rank <= club.targetPosition ? "ON COURSE" : "NEED A RUN"}</span></div></section></div>
     <ClubHeritageCard club={club} career={career} />
@@ -398,7 +524,8 @@ function Newsroom({ career, setView }: { career: Career; setView: (view: View) =
   const [category, setCategory] = useState<"all" | NewsroomStory["type"]>("all");
   const [query, setQuery] = useState("");
   const [expandedStory, setExpandedStory] = useState<string | null>(null);
-  const leagueTables = useMemo(() => ENGLISH_LEAGUES.map((league) => ({ league, rows: getTable(career, league.id) })), [career]);
+  const availableLeagues = [...ENGLISH_LEAGUES, ...WORLD_LEAGUES.filter((league) => career.clubs.some((entry) => entry.leagueId === league.id))];
+  const leagueTables = useMemo(() => availableLeagues.map((league) => ({ league, rows: getTable(career, league.id) })), [career]);
   const selectedLeague = leagueTables.find((entry) => entry.league.id === leagueId) ?? leagueTables[0];
   const playedInDivision = career.fixtures.filter((fixture) => fixture.leagueId === leagueId && fixture.played && fixture.homeGoals !== null && fixture.awayGoals !== null);
   const latestDivisionRound = playedInDivision.reduce((latest, fixture) => Math.max(latest, fixture.round), 0);
@@ -411,7 +538,7 @@ function Newsroom({ career, setView }: { career: Career; setView: (view: View) =
     const home = getClub(career, fixture.homeClubId);
     const away = getClub(career, fixture.awayClubId);
     const result = `${fixture.homeGoals}–${fixture.awayGoals}`;
-    return { id: `world-${fixture.id}`, date: fixture.date, headline: `${home.name} ${result} ${away.name}`, body: `${selectedLeague.league.name} · Round ${fixture.round}. ${home.name} and ${away.name} share the latest chapter of the promotion race.`, type: "match", league: LEAGUE_SHORT_LABEL[leagueId], route: "fixtures", score: result };
+    return { id: `world-${fixture.id}`, date: fixture.date, headline: `${home.name} ${result} ${away.name}`, body: `${selectedLeague.league.name} · Round ${fixture.round}. ${home.name} and ${away.name} share the latest chapter of the title race.`, type: "match", league: leagueShortLabel(leagueId), route: "fixtures", score: result };
   });
   const personalStories: NewsroomStory[] = career.news.map((item) => ({
     ...item,
@@ -430,19 +557,19 @@ function Newsroom({ career, setView }: { career: Career; setView: (view: View) =
     <header className="newsroom-heading"><div><p className="eyebrow">THE CLUB · WORLD DESK</p><h1>Newsroom</h1><p>Every result, rumour and turning point from the world you’re building.</p></div><div className="newsroom-live"><i /> SEASON {career.season} · {getCurrentDate(career).toUpperCase()}<span>LIVE CAREER FEED</span></div></header>
 
     <div className="news-league-ticker" aria-label="League table leaders">
-      <div className="news-ticker-label"><span>THE RACE</span><small>ENGLAND · 7 DIVISIONS</small></div>
-      <div className="news-ticker-options">{leagueWatch.map(({ league, leader: divisionLeader }) => <button type="button" key={league.id} className={leagueId === league.id ? "selected" : ""} onClick={() => setLeagueId(league.id)} aria-pressed={leagueId === league.id} title={`${league.name} leader`}><span>{LEAGUE_SHORT_LABEL[league.id]}</span><strong>{divisionLeader?.club ?? "—"}</strong><small>{divisionLeader?.points ?? 0} PTS</small></button>)}</div>
+      <div className="news-ticker-label"><span>THE RACE</span><small>{leagueTables.length} LIVE LEAGUES · {WORLD_COUNTRIES.length} NATIONS</small></div>
+      <div className="news-ticker-options">{leagueWatch.map(({ league, leader: divisionLeader }) => <button type="button" key={league.id} className={leagueId === league.id ? "selected" : ""} onClick={() => setLeagueId(league.id)} aria-pressed={leagueId === league.id} title={`${league.name} leader`}><span>{leagueShortLabel(league.id)}</span><strong>{divisionLeader?.club ?? "—"}</strong><small>{divisionLeader?.points ?? 0} PTS</small></button>)}</div>
     </div>
 
     <div className="newsroom-top-grid">
       <article className={`news-lead type-${lead.type}`}>
         <div className="news-lead-art" aria-hidden="true"><div className="news-art-lines" /><span className="news-art-word">THE<br />CLUB</span><span className="news-art-orbit" /></div>
-        <div className="news-lead-copy"><div className="news-lead-kicker"><span>{lead.type === "press" ? "PRESSURE WATCH" : lead.type === "match" ? "MATCHDAY LEAD" : lead.type === "transfer" ? "TRANSFER DESK" : "THE LEAD STORY"}</span><time>{lead.date}</time></div><h2>{lead.headline}</h2><p>{lead.body}</p><div className="news-lead-footer"><span><ClubCrest club={club} size="small" /> {club.name} · {LEAGUE_SHORT_LABEL[club.leagueId as LeagueId] ?? "ENGLAND"}</span><button className="button button-primary" onClick={() => setView(lead.route)}>{lead.type === "match" ? "Open match centre" : lead.type === "transfer" ? "Open recruitment" : lead.type === "stadium" ? "Visit the ground" : "Open club desk"}</button></div></div>
+        <div className="news-lead-copy"><div className="news-lead-kicker"><span>{lead.type === "press" ? "PRESSURE WATCH" : lead.type === "match" ? "MATCHDAY LEAD" : lead.type === "transfer" ? "TRANSFER DESK" : "THE LEAD STORY"}</span><time>{lead.date}</time></div><h2>{lead.headline}</h2><p>{lead.body}</p><div className="news-lead-footer"><span><ClubCrest club={club} size="small" /> {club.name} · {leagueShortLabel(club.leagueId)}</span><button className="button button-primary" onClick={() => setView(lead.route)}>{lead.type === "match" ? "Open match centre" : lead.type === "transfer" ? "Open recruitment" : lead.type === "stadium" ? "Visit the ground" : "Open club desk"}</button></div></div>
       </article>
       <section className="news-race-card"><div className="news-block-heading"><div><p className="eyebrow">TABLE WATCH</p><h2>{selectedLeague.league.name}</h2></div><Trophy size={18} /></div><p className="news-race-caption">THE PROMOTION AND TITLE PICTURE</p>{selectedLeague.rows.slice(0, 4).map((row, index) => <div className={`news-race-row ${row.clubId === career.clubId ? "your-club" : ""}`} key={row.clubId}><span className="race-position">{String(index + 1).padStart(2, "0")}</span><span className="race-team"><ClubCrest club={getClub(career, row.clubId)} size="small" /><strong>{row.club}</strong></span><span className="race-record">{row.played}P · {row.goalsFor - row.goalsAgainst > 0 ? "+" : ""}{row.goalsFor - row.goalsAgainst}GD</span><b>{row.points}</b></div>)}<div className="race-gap-note">{leader && runnerUp ? `${leader.points - runnerUp.points} point${leader.points - runnerUp.points === 1 ? "" : "s"} separate first and second.` : "The table will take shape after the opening round."}</div><button className="text-button" onClick={() => setView("table")}>Open league table</button></section>
     </div>
 
-    <section className="news-match-centre"><div className="news-match-heading"><div><p className="eyebrow">SCORES & FIXTURES</p><h2>Match centre</h2></div><div><label htmlFor="news-league-select">Competition</label><select id="news-league-select" className="compact-select" value={leagueId} onChange={(event) => setLeagueId(event.target.value as LeagueId)}>{ENGLISH_LEAGUES.map((league) => <option value={league.id} key={league.id}>{league.name}</option>)}</select><button className="text-button" onClick={() => setView("fixtures")}>Full fixtures</button></div></div><div className="news-match-status"><span>{matchdayCaption}</span><small>{selectedLeague.league.name} · {matchdayFixtures.length} matches</small></div><div className="news-scores">{matchdayFixtures.slice(0, 6).map((fixture) => { const home = getClub(career, fixture.homeClubId); const away = getClub(career, fixture.awayClubId); return <button type="button" className="news-score-card" key={fixture.id} onClick={() => setView("fixtures")} aria-label={`View ${home.name} against ${away.name} in fixtures`}><span className="score-club"><ClubCrest club={home} size="small" /><strong>{home.shortName}</strong></span><span className="scoreline">{fixture.played && fixture.homeGoals !== null && fixture.awayGoals !== null ? `${fixture.homeGoals}–${fixture.awayGoals}` : "v"}</span><span className="score-club"><ClubCrest club={away} size="small" /><strong>{away.shortName}</strong></span><small>{fixture.played ? "FULL TIME" : "UP NEXT"}</small></button>; })}{!matchdayFixtures.length && <div className="news-no-matches"><CalendarDays size={18} /><span>No fixtures are scheduled for this division this week.</span></div>}</div></section>
+    <section className="news-match-centre"><div className="news-match-heading"><div><p className="eyebrow">SCORES & FIXTURES</p><h2>Match centre</h2></div><div><label htmlFor="news-league-select">Competition</label><select id="news-league-select" className="compact-select" value={selectedLeague.league.id} onChange={(event) => setLeagueId(event.target.value as LeagueId)}>{availableLeagues.map((league) => <option value={league.id} key={league.id}>{league.name}</option>)}</select><button className="text-button" onClick={() => setView("fixtures")}>Full fixtures</button></div></div><div className="news-match-status"><span>{matchdayCaption}</span><small>{selectedLeague.league.name} · {matchdayFixtures.length} matches</small></div><div className="news-scores">{matchdayFixtures.slice(0, 6).map((fixture) => { const home = getClub(career, fixture.homeClubId); const away = getClub(career, fixture.awayClubId); return <button type="button" className="news-score-card" key={fixture.id} onClick={() => setView("fixtures")} aria-label={`View ${home.name} against ${away.name} in fixtures`}><span className="score-club"><ClubCrest club={home} size="small" /><strong>{home.shortName}</strong></span><span className="scoreline">{fixture.played && fixture.homeGoals !== null && fixture.awayGoals !== null ? `${fixture.homeGoals}–${fixture.awayGoals}` : "v"}</span><span className="score-club"><ClubCrest club={away} size="small" /><strong>{away.shortName}</strong></span><small>{fixture.played ? "FULL TIME" : "UP NEXT"}</small></button>; })}{!matchdayFixtures.length && <div className="news-no-matches"><CalendarDays size={18} /><span>No fixtures are scheduled for this division this week.</span></div>}</div></section>
 
     <div className="newsroom-lower-grid">
       <section className="news-feed-panel"><div className="news-feed-heading"><div><p className="eyebrow">ACROSS THE PYRAMID</p><h2>Latest stories</h2></div><span>{filteredStories.length} stories</span></div><div className="news-filters" role="group" aria-label="Filter news stories">{([ ["all", "All"], ["match", "Results"], ["transfer", "Transfers"], ["club", "Club"], ["press", "Pressure"], ["stadium", "Stadium"] ] as const).map(([value, label]) => <button type="button" key={value} className={category === value ? "active" : ""} onClick={() => setCategory(value)} aria-pressed={category === value}>{label}</button>)}<label className="news-search"><Search size={15} /><input aria-label="Search news" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search headlines" /></label></div><div className="news-story-list">{filteredStories.slice(0, 20).map((story) => <article className="news-story-row" key={story.id}><span className={`news-story-mark type-${story.type}`}>{story.type === "match" ? <Flag size={16} /> : story.type === "transfer" ? <RefreshCw size={16} /> : story.type === "stadium" ? <Building2 size={16} /> : story.type === "press" ? <Megaphone size={16} /> : <Newspaper size={16} />}</span><div className="news-story-content"><div className="news-story-meta"><span>{story.league ?? story.type.toUpperCase()}</span><time>{story.date}</time></div><h3>{story.headline}</h3><p>{expandedStory === story.id ? story.body : story.body.length > 116 ? `${story.body.slice(0, 116).trimEnd()}…` : story.body}</p>{expandedStory === story.id && <button className="news-story-action" onClick={() => setView(story.route)}>{story.type === "match" ? "View fixtures" : story.type === "transfer" ? "Open recruitment" : story.type === "stadium" ? "Open stadium architect" : story.type === "club" ? "Open club profile" : "Review club overview"}</button>}</div><button className="news-read-button" type="button" aria-expanded={expandedStory === story.id} onClick={() => setExpandedStory(expandedStory === story.id ? null : story.id)}>{expandedStory === story.id ? "Close" : "Read story"}</button></article>)}{!filteredStories.length && <div className="news-empty"><Newspaper size={22} /><strong>No stories match this view</strong><span>Try another desk or clear your search.</span><button className="text-button" onClick={() => { setCategory("all"); setQuery(""); }}>Reset filters</button></div>}</div></section>
@@ -465,6 +592,26 @@ function ClubHeritageCard({ club, career }: { club: Club; career: Career }) {
 }
 
 function TargetIcon() { return <Flag size={16} />; }
+
+function SquadTacticsArea({ career, setCareer, onPlayerProfile, view, setView }: {
+  career: Career;
+  setCareer: (career: Career) => void;
+  onPlayerProfile: (playerId: string) => void;
+  view: "squad" | "tactics";
+  setView: (view: View) => void;
+}) {
+  const selectedCount = career.lineup.length;
+  return <>
+    <SectionHeading kicker="FIRST TEAM · MATCH PREPARATION" title="Squad & tactics" detail="Choose your XI, assign roles and shape how the team plays from one place." action={<span className={`team-xi-status ${selectedCount === 11 ? "complete" : "incomplete"}`}><Users size={15} /> {selectedCount} / 11 selected</span>} />
+    <div className="team-area-tabs" role="tablist" aria-label="First team workspace">
+      <button type="button" role="tab" id="team-squad-tab" aria-selected={view === "squad"} aria-controls="team-squad-panel" className={view === "squad" ? "active" : ""} onClick={() => setView("squad")}><Users size={15} /><span>Squad</span><small>{getUserPlayers(career).length} players</small></button>
+      <button type="button" role="tab" id="team-tactics-tab" aria-selected={view === "tactics"} aria-controls="team-tactics-panel" className={view === "tactics" ? "active" : ""} onClick={() => setView("tactics")}><Activity size={15} /><span>Tactics board</span><small>{career.formation}</small></button>
+    </div>
+    {view === "squad"
+      ? <div className="team-tab-panel" id="team-squad-panel" role="tabpanel" aria-labelledby="team-squad-tab"><Squad career={career} setCareer={setCareer} onPlayerProfile={onPlayerProfile} /></div>
+      : <div className="team-tab-panel" id="team-tactics-panel" role="tabpanel" aria-labelledby="team-tactics-tab"><Tactics career={career} setCareer={setCareer} /></div>}
+  </>;
+}
 
 function Squad({ career, setCareer, onPlayerProfile }: { career: Career; setCareer: (career: Career) => void; onPlayerProfile: (playerId: string) => void }) {
   const [filter, setFilter] = useState("All players");
@@ -497,10 +644,10 @@ function Squad({ career, setCareer, onPlayerProfile }: { career: Career; setCare
     setCareer(next);
   };
 
-  return <><SectionHeading kicker="FIRST TEAM" title="The squad" detail={`${allPlayers.length} players · ${starters} selected · ${allPlayers.filter((player) => player.contractYears <= 1).length} contracts expiring`} action={<button className="button button-secondary" onClick={autoSelectXI}><Sparkles size={15} /> Auto select XI</button>} />
+  return <>
     <div className="squad-summary"><div><span className="rating-chip">{Math.round(allPlayers.reduce((sum, player) => sum + player.overall, 0) / Math.max(1, allPlayers.length))}</span><span><strong>Squad rating</strong><small>Balanced · {allPlayers.length} senior players</small></span></div><div><span className="summary-stat">{MONEY(allPlayers.reduce((sum, player) => sum + player.wage, 0))}</span><span><strong>Weekly wages</strong><small>{MONEY(getClub(career).wageBudget)} budget</small></span></div><div><span className="summary-stat">{allPlayers.filter((player) => player.contractYears <= 1).length}</span><span><strong>Contract watch</strong><small>Players need a decision</small></span></div></div>
-    <section className="matchday-selection-panel"><div className="matchday-selection-head"><div><p className="eyebrow">MATCHDAY SELECTION</p><h2>First XI · {career.formation}</h2><span>Choose a shirt on the player list to change the squad. Your formation updates on the tactics board.</span></div><div className="matchday-shape-preview"><FormationMini formation={career.formation} /><strong>{selectedPlayers.length} / 11</strong><small>XI SELECTED</small></div></div><div className="matchday-player-strip">{selectedPlayers.map((player, index) => <button className="matchday-player-chip" key={player.id} onClick={() => setCareer(setPlayerSelection(career, player.id))} aria-label={"Remove " + player.name + " from starting XI"}><span className={`player-position position-${player.position.toLowerCase()}`}>{player.position.slice(0, 1)}</span><span><strong>{String(index + 1).padStart(2, "0")} · {player.name}</strong><small>{player.position} · {player.role ?? "First-team role"}</small></span><b>{player.overall}</b><i>×</i></button>)}{!selectedPlayers.length && <p className="matchday-selection-empty">No players selected yet. Use the player list below or let the assistant choose an XI.</p>}</div><div className="matchday-selection-footer"><span><Users size={14} /> {Math.max(0, allPlayers.length - selectedPlayers.length)} squad players available</span><span>Selection is saved with this career</span></div></section>
-    <section className="panel table-panel"><div className="panel-toolbar"><div className="filter-tabs">{["All players", "GK", "DEF", "MID", "FWD"].map((tab) => <button key={tab} onClick={() => setFilter(tab)} className={filter === tab ? "selected" : ""}>{tab}</button>)}</div><span className="squad-table-caption">SELECTED {starters} / 11</span></div>{notice && <div className="inline-notice"><Check size={15} />{notice}<button onClick={() => setNotice("")}><X size={13} /></button></div>}<div className="data-table-wrap"><table className="data-table squad-table"><thead><tr><th>Player</th><th>Pos</th><th>Age</th><th>OVR</th><th>Potential</th><th>Morale</th><th>Contract</th><th>Wage / wk</th><th>Training</th><th>Role / selection</th><th /></tr></thead><tbody>{players.map((player) => { const roleOptions = player.position === "GK" ? ["Goalkeeper", "Sweeper keeper"] : player.position === "DEF" ? ["Centre-back", "Ball-playing defender", "Full-back", "Wing-back"] : player.position === "MID" ? ["Midfielder", "Holding midfielder", "Box-to-box", "Playmaker", "Wide midfielder"] : ["Forward", "Pressing forward", "Target forward", "Inside forward"]; return <tr key={player.id}><td><div className="player-cell"><span className={`player-position position-${player.position.toLowerCase()}`}>{player.position.slice(0, 1)}</span><div><button className="player-profile-link" onClick={() => onPlayerProfile(player.id)}>{player.name}</button><small>{player.overall >= 75 ? "Key player" : player.age < 21 ? "Young prospect" : "First team"} · Rapport {player.managerRapport ?? 58}</small></div></div></td><td>{player.position}</td><td>{player.age}</td><td><span className={`ovr-badge ${player.overall >= 72 ? "high" : player.overall < 56 ? "low" : ""}`}>{player.overall}</span></td><td><div className="potential-cell"><span>{player.potential}</span><div className="tiny-progress"><i style={{ width: `${Math.round(player.overall / player.potential * 100)}%` }} /></div></div></td><td><span className="morale-cell"><i style={{ width: `${player.morale}%` }} /><span>{player.morale}</span></span></td><td><span className={player.contractYears <= 1 ? "contract-warning" : ""}>{player.contractYears} {player.contractYears === 1 ? "yr" : "yrs"}</span>{player.contractYears <= 1 && <button className="renew-link" onClick={() => { setCareer(renewContract(career, player.id)); setNotice(`${player.name} agrees a new deal.`); }}>Renew</button>}</td><td>{MONEY(player.wage)}</td><td><select className="compact-select" aria-label={`Training focus for ${player.name}`} value={player.trainingFocus} onChange={(event) => setTraining(player.id, event.target.value)}>{TRAINING_OPTIONS.map((option) => <option key={option}>{option}</option>)}</select></td><td><div className="role-selection-cell"><select className="compact-select" aria-label={`Role for ${player.name}`} value={player.role ?? roleOptions[0]} onChange={(event) => setRole(player.id, event.target.value)}>{roleOptions.map((option) => <option key={option}>{option}</option>)}</select><button className={`role-button ${career.lineup.includes(player.id) ? "in-xi" : ""}`} onClick={() => setCareer(setPlayerSelection(career, player.id))}>{career.lineup.includes(player.id) ? "Starting XI" : "Select"}</button></div></td><td><button className="row-more" aria-label={`Renew contract for ${player.name}`} title="Renew contract" onClick={() => { setCareer(renewContract(career, player.id)); setNotice(`${player.name} agrees a new deal.`); }}><Plus size={15} /></button></td></tr>; })}</tbody></table></div><div className="table-footer"><span>Showing {players.length} players</span><span>Low rapport affects player morale and match performance.</span></div></section></>;
+    <section className="matchday-selection-panel"><div className="matchday-selection-head"><div><p className="eyebrow">MATCHDAY SELECTION</p><h2>First XI · {career.formation}</h2><span>Choose a shirt on the player list to change the squad. Your formation updates on the tactics board.</span></div><div className="matchday-shape-preview"><FormationMini formation={career.formation} /><strong>{selectedPlayers.length} / 11</strong><small>XI SELECTED</small><button className="button button-secondary button-small" onClick={autoSelectXI}><Sparkles size={14} /> Auto select</button></div></div><div className="matchday-player-strip">{selectedPlayers.map((player, index) => <button className="matchday-player-chip" key={player.id} onClick={() => setCareer(setPlayerSelection(career, player.id))} aria-label={"Remove " + player.name + " from starting XI"}><span className={`player-position position-${player.position.toLowerCase()}`}>{player.position.slice(0, 1)}</span><span><strong>{String(index + 1).padStart(2, "0")} · {player.name}</strong><small>{player.position} · {player.role ?? "First-team role"}</small></span><b>{player.overall}</b><i>×</i></button>)}{!selectedPlayers.length && <p className="matchday-selection-empty">No players selected yet. Use the player list below or let the assistant choose an XI.</p>}</div><div className="matchday-selection-footer"><span><Users size={14} /> {Math.max(0, allPlayers.length - selectedPlayers.length)} squad players available</span><span>Selection is saved with this career</span></div></section>
+    <section className="panel table-panel"><div className="panel-toolbar"><div className="filter-tabs">{["All players", "GK", "DEF", "MID", "FWD"].map((tab) => <button key={tab} onClick={() => setFilter(tab)} className={filter === tab ? "selected" : ""}>{tab}</button>)}</div><span className="squad-table-caption">SELECTED {starters} / 11</span></div>{notice && <div className="inline-notice"><Check size={15} />{notice}<button onClick={() => setNotice("")}><X size={13} /></button></div>}<div className="data-table-wrap"><table className="data-table squad-table"><thead><tr><th>Player</th><th>Pos</th><th>Age</th><th>OVR</th><th>Potential</th><th>Morale</th><th>Contract</th><th>Wage / wk</th><th>Training</th><th>Role / selection</th><th /></tr></thead><tbody>{players.map((player) => { const roleOptions = player.position === "GK" ? ["Goalkeeper", "Sweeper keeper"] : player.position === "DEF" ? ["Centre-back", "Ball-playing defender", "Full-back", "Wing-back"] : player.position === "MID" ? ["Midfielder", "Holding midfielder", "Box-to-box", "Playmaker", "Wide midfielder"] : ["Forward", "Pressing forward", "Target forward", "Inside forward"]; return <tr key={player.id}><td><div className="player-cell"><PlayerPortrait id={player.id} name={player.name} /><div><button className="player-profile-link" onClick={() => onPlayerProfile(player.id)}>{player.name}</button><small>{player.overall >= 75 ? "Key player" : player.age < 21 ? "Young prospect" : "First team"} · Rapport {player.managerRapport ?? 58}</small></div></div></td><td>{player.position}</td><td>{player.age}</td><td><span className={`ovr-badge ${player.overall >= 72 ? "high" : player.overall < 56 ? "low" : ""}`}>{player.overall}</span></td><td><div className="potential-cell"><span>{player.potential}</span><div className="tiny-progress"><i style={{ width: `${Math.round(player.overall / player.potential * 100)}%` }} /></div></div></td><td><span className="morale-cell"><i style={{ width: `${player.morale}%` }} /><span>{player.morale}</span></span></td><td><span className={player.contractYears <= 1 ? "contract-warning" : ""}>{player.contractYears} {player.contractYears === 1 ? "yr" : "yrs"}</span>{player.contractYears <= 1 && <button className="renew-link" onClick={() => { setCareer(renewContract(career, player.id)); setNotice(`${player.name} agrees a new deal.`); }}>Renew</button>}</td><td>{MONEY(player.wage)}</td><td><select className="compact-select" aria-label={`Training focus for ${player.name}`} value={player.trainingFocus} onChange={(event) => setTraining(player.id, event.target.value)}>{TRAINING_OPTIONS.map((option) => <option key={option}>{option}</option>)}</select></td><td><div className="role-selection-cell"><select className="compact-select" aria-label={`Role for ${player.name}`} value={player.role ?? roleOptions[0]} onChange={(event) => setRole(player.id, event.target.value)}>{roleOptions.map((option) => <option key={option}>{option}</option>)}</select><button className={`role-button ${career.lineup.includes(player.id) ? "in-xi" : ""}`} onClick={() => setCareer(setPlayerSelection(career, player.id))}>{career.lineup.includes(player.id) ? "Starting XI" : "Select"}</button></div></td><td><button className="row-more" aria-label={`Renew contract for ${player.name}`} title="Renew contract" onClick={() => { setCareer(renewContract(career, player.id)); setNotice(`${player.name} agrees a new deal.`); }}><Plus size={15} /></button></td></tr>; })}</tbody></table></div><div className="table-footer"><span>Showing {players.length} players</span><span>Low rapport affects player morale and match performance.</span></div></section></>;
 }
 
 function PlayerProfile({ player, report, known, onClose }: { player: Player; report: ReturnType<typeof getScoutingReport>; known: boolean; onClose: () => void }) {
@@ -521,7 +668,7 @@ function PlayerProfile({ player, report, known, onClose }: { player: Player; rep
   const reportedOverall = report?.currentAbility ?? player.overall;
   const reportedPotential = report?.potential ?? player.potential;
   return <div className="modal-backdrop player-profile-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section className="modal-card player-profile-modal" role="dialog" aria-modal="true" aria-labelledby="player-profile-title"><button className="modal-close" aria-label="Close player profile" onClick={onClose}><X size={18} /></button>
-    <div className="player-profile-hero"><div className="profile-player-avatar"><span className={`player-position position-${player.position.toLowerCase()}`}>{player.position.slice(0, 1)}</span><strong>{player.position}</strong></div><div className="profile-identity"><p className="eyebrow">PLAYER DOSSIER · {player.nationality ?? "English"}</p><h2 id="player-profile-title">{player.name}</h2><p>{currentClub} · Age {player.age} · {player.squadLevel ?? "First team"}</p><div className="profile-bio-facts"><span><small>DATE OF BIRTH</small><b>{dateOfBirth}</b></span><span><small>BIRTHPLACE</small><b>{player.birthPlace ?? "Unknown"}</b></span><span><small>CONTRACT</small><b>{player.contractYears ? `${player.contractYears} years` : "Youth / free"}</b></span></div></div><div className="profile-ovr"><small>OVR</small><strong>{known ? reportedOverall : "—"}</strong><span>POT {known ? reportedPotential : "?"}</span></div></div>
+    <div className="player-profile-hero"><div className="profile-player-avatar"><PlayerPortrait id={player.id} name={player.name} size="large" /></div><div className="profile-identity"><p className="eyebrow">PLAYER DOSSIER · {player.nationality ?? "English"}</p><h2 id="player-profile-title">{player.name}</h2><p>{currentClub} · Age {player.age} · {player.squadLevel ?? "First team"}</p><div className="profile-bio-facts"><span><small>DATE OF BIRTH</small><b>{dateOfBirth}</b></span><span><small>BIRTHPLACE</small><b>{player.birthPlace ?? "Unknown"}</b></span><span><small>CONTRACT</small><b>{player.contractYears ? `${player.contractYears} years` : "Youth / free"}</b></span></div></div><div className="profile-ovr"><small>OVR</small><strong>{known ? reportedOverall : "—"}</strong><span>POT {known ? reportedPotential : "?"}</span></div></div>
     {!known ? <div className="profile-scout-lock"><Shield size={18} /><div><strong>Scouting report required</strong><span>Biography and club history are available. Ratings, attributes and potential stay hidden until your club commissions a report.</span></div></div> : <>
       <div className="profile-primary-ratings">{([["PAC", "pace"], ["SHO", "shooting"], ["PAS", "passing"], ["DRI", "dribbling"], ["DEF", "defending"], ["PHY", "physical"]] as [string, keyof PlayerAttributes][]).map(([label, key]) => <div key={key}><strong>{rating(key)}</strong><span>{label}</span></div>)}</div>
       <div className="profile-section-heading"><div><p className="eyebrow">ATTRIBUTE BREAKDOWN</p><h3>Player ratings</h3></div><span>ALL RATINGS OUT OF 100</span></div>
@@ -551,7 +698,18 @@ function formationLines(formation: string) {
 
 function FormationMini({ formation }: { formation: string }) {
   const rows = formationLines(formation);
-  return <span className="formation-mini" aria-label={formation + " shape preview"}><span className="formation-mini-lines">{rows.map((line, index) => <span className="formation-mini-line" key={index}>{line.map((_, playerIndex) => <i key={playerIndex} />)}</span>)}</span></span>;
+  const lineY = (index: number) => 7 + ((index + 1) * 94) / (rows.length + 1);
+  return <svg className="formation-mini" viewBox="0 0 72 108" role="img" aria-label={formation + " formation on a football pitch"}>
+    <rect x="2" y="2" width="68" height="104" rx="5" fill="#143326" stroke="#9ac49b" strokeOpacity=".72" strokeWidth="1.2" />
+    <path d="M2 54H70M18 2v14h36V2M18 106V92h36v14" fill="none" stroke="#c9d8ae" strokeOpacity=".56" strokeWidth="1" />
+    <circle cx="36" cy="54" r="9" fill="none" stroke="#c9d8ae" strokeOpacity=".56" strokeWidth="1" /><circle cx="36" cy="54" r="1.5" fill="#c9d8ae" />
+    {rows.flatMap((line, lineIndex) => line.map((position, playerIndex) => {
+      const x = 5 + (playerIndex + 1) * (62 / (line.length + 1));
+      const y = lineY(lineIndex);
+      const fill = position === "GK" ? "#d9dfba" : position === "FWD" ? "#d1ed85" : "#76cfaa";
+      return <g key={`${lineIndex}-${playerIndex}`}><circle cx={x} cy={y} r="3.7" fill="#071710" opacity=".72" /><circle cx={x} cy={y - .7} r="2.8" fill={fill} stroke="#e3efcf" strokeWidth=".7" /></g>;
+    }))}
+  </svg>;
 }
 
 function Tactics({ career, setCareer }: { career: Career; setCareer: (career: Career) => void }) {
@@ -600,7 +758,6 @@ function Tactics({ career, setCareer }: { career: Career; setCareer: (career: Ca
     return { x: local.x, y: local.y };
   };
   return <>
-    <SectionHeading kicker="MATCH PREPARATION" title="Tactics board" detail="Place every player, plan two phases of play and tune the team’s behaviour." action={<span className="tactics-status"><span /> READY FOR MATCHDAY</span>} />
     <div className="tactics-layout">
       <section className="pitch-panel">
         <div className="pitch-title"><span>DRAG PLAYERS TO SET YOUR SHAPE</span><strong>{career.formation}</strong></div>
@@ -642,13 +799,14 @@ function Fixtures({ career, setCareer, onAdvance, seasonEnd }: { career: Career;
     const isCurrent = fixture.round === career.round;
     const home = getClub(career, fixture.homeClubId);
     const away = getClub(career, fixture.awayClubId);
-    return <div key={fixture.id} className={`fixture-row ${isCurrent ? "fixture-current" : ""} ${isUser ? "fixture-user" : ""}`}><div className="fixture-round"><small>MATCHDAY</small><strong>{String(fixture.round).padStart(2, "0")}</strong></div><div className="fixture-date">{pageDate(fixture.date)}</div><div className="fixture-home"><strong>{home.name}</strong><ClubCrest club={home} size="small" /></div><div className="fixture-score">{fixture.played ? `${fixture.homeGoals} – ${fixture.awayGoals}` : <span>15:00</span>}</div><div className="fixture-away"><ClubCrest club={away} size="small" /><strong>{away.name}</strong></div><div className="fixture-status">{fixture.played ? <span className="played-label">FULL TIME</span> : isCurrent ? <span className="up-next-label">UP NEXT</span> : <span className="scheduled-label">SCHEDULED</span>}</div></div>;
+    return <div key={fixture.id} className={`fixture-row ${isCurrent ? "fixture-current" : ""} ${isUser ? "fixture-user" : ""}`}><div className="fixture-round"><small>MATCHDAY</small><strong>{String(fixture.round).padStart(2, "0")}</strong></div><div className="fixture-date">{pageDate(fixture.date)}</div><div className="fixture-home"><strong>{home.name}</strong><ClubCrest club={home} size="small" /></div><div className="fixture-score">{fixture.played ? `${fixture.homeGoals} – ${fixture.awayGoals}` : <span>{formatGameTime(15)}</span>}</div><div className="fixture-away"><ClubCrest club={away} size="small" /><strong>{away.name}</strong></div><div className="fixture-status">{fixture.played ? <span className="played-label">FULL TIME</span> : isCurrent ? <span className="up-next-label">UP NEXT</span> : <span className="scheduled-label">SCHEDULED</span>}</div></div>;
   })}</div><div className="season-fixture-foot"><span>{open.length ? `${open.length} fixtures scheduled for this matchday` : "All fixtures completed"}</span><span>Your result updates league position, board confidence and finances.</span></div></>;
 }
 
 function LeagueTable({ career }: { career: Career }) {
   const [leagueId, setLeagueId] = useState<LeagueId>(getCurrentLeague(career).id);
-  const league = ENGLISH_LEAGUES.find((entry) => entry.id === leagueId) ?? getCurrentLeague(career);
+  const availableLeagues = [...ENGLISH_LEAGUES, ...WORLD_LEAGUES.filter((entry) => career.clubs.some((club) => club.leagueId === entry.id))];
+  const league = availableLeagues.find((entry) => entry.id === leagueId) ?? getCurrentLeague(career);
   const table = getTable(career, league.id);
   const seasonLabel = (2026 + career.season - 1) + "/" + String(2027 + career.season - 1).slice(-2);
   const zoneFor = (index: number) => {
@@ -659,7 +817,7 @@ function LeagueTable({ career }: { career: Career }) {
     return "";
   };
   return <>
-    <SectionHeading kicker={league.name.toUpperCase() + " · " + seasonLabel} title="League table" detail={league.clubs + " clubs · " + league.rounds + " league matches · England"} action={<label className="league-select-label">DIVISION<select className="compact-select" aria-label="Choose a league table" value={league.id} onChange={(event) => setLeagueId(event.target.value as LeagueId)}>{ENGLISH_LEAGUES.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>} />
+    <SectionHeading kicker={league.name.toUpperCase() + " · " + seasonLabel} title="League table" detail={`${league.clubs} clubs · ${league.rounds} league matches · ${league.country}`} action={<label className="league-select-label">DIVISION<select className="compact-select" aria-label="Choose a league table" value={league.id} onChange={(event) => setLeagueId(event.target.value as LeagueId)}>{availableLeagues.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>} />
     <section className="panel league-panel">
       <div className="league-table-caption"><span>{league.name.toUpperCase()}</span><span>AFTER ROUND {Math.min(league.rounds, Math.max(0, career.round - 1))} OF {league.rounds}</span></div>
       <div className="data-table-wrap"><table className="data-table league-table"><thead><tr><th>Pos</th><th>Club</th><th>Pld</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>GD</th><th>Pts</th></tr></thead><tbody>{table.map((row, index) => <tr key={row.clubId} className={row.clubId === career.clubId ? "current-row" : ""}><td><span className={"league-rank " + zoneFor(index)}>{String(index + 1).padStart(2, "0")}</span></td><td><div className="league-club"><ClubCrest club={getClub(career, row.clubId)} size="small" /><strong>{row.club}</strong>{row.clubId === career.clubId && <span className="you-tag">YOU</span>}</div></td><td>{row.played}</td><td>{row.wins}</td><td>{row.draws}</td><td>{row.losses}</td><td>{row.goalsFor}</td><td>{row.goalsAgainst}</td><td><span className={row.goalsFor - row.goalsAgainst < 0 ? "negative" : "positive"}>{row.goalsFor - row.goalsAgainst > 0 ? "+" : ""}{row.goalsFor - row.goalsAgainst}</span></td><td><strong className="points-cell">{row.points}</strong></td></tr>)}</tbody></table></div>
@@ -700,7 +858,13 @@ function Transfers({ career, setCareer, onPlayerProfile }: { career: Career; set
   const worldPage = useMemo(() => filter === "Career clubs" ? null : searchWorldDatabase(deferredQuery, filter, page, localPageSize, criteria), [deferredQuery, filter, page, positionFilter, ageFilter, countryFilter]);
   const localPage = filter === "Career clubs" ? localPlayers.slice(page * localPageSize, (page + 1) * localPageSize) : [];
   const listings: WorldPlayerListing[] = filter === "Career clubs"
-    ? localPage.map((player) => ({ id: player.id, name: player.name, age: player.age, position: player.position, nationality: player.nationality ?? "English", clubId: player.clubId, clubName: player.clubId ? getClub(career, player.clubId).name : "Free agent", country: player.clubId ? getClub(career, player.clubId).country : "England", group: player.clubId ? "First team" : "Free agent" }))
+    ? localPage.map((player) => {
+      const playerClub = player.clubId ? career.clubs.find((entry) => entry.id === player.clubId) : null;
+      const country = playerClub?.country ?? player.nationality ?? "England";
+      const geography = WORLD_COUNTRIES.find((entry) => entry.country === country);
+      const league = playerClub ? [...ENGLISH_LEAGUES, ...WORLD_LEAGUES].find((entry) => entry.id === playerClub.leagueId) : null;
+      return { id: player.id, name: player.name, age: player.age, position: player.position, nationality: player.nationality ?? "English", clubId: playerClub?.id ?? null, clubName: playerClub?.name ?? "Free agent", country, continent: geography?.continent ?? "Europe", leagueName: league?.name ?? "Free agency", group: playerClub ? "First team" : "Free agent" };
+    })
     : worldPage?.players ?? [];
   const hasMore = filter === "Career clubs" ? (page + 1) * localPageSize < localPlayers.length : Boolean(worldPage?.hasMore);
   const resultCount = filter === "Career clubs" ? localPlayers.length : worldPage?.total ?? worldGroupCount(filter);
@@ -726,8 +890,8 @@ function Transfers({ career, setCareer, onPlayerProfile }: { career: Career; set
     else { setCareer(next); setNotice("The scouted prospect has joined the academy pathway."); }
   };
   return <>
-    <SectionHeading kicker="RECRUITMENT" title="World player database" detail="Search 70,000 players across 20 countries. Filter by position, age and nation, then commission a report before ability and potential are revealed." action={<div className="budget-pill"><Wallet size={15} /><span>TRANSFER BUDGET</span><strong>{MONEY(club.transferBudget)}</strong></div>} />
-    <div className="world-database-intro"><div className="database-emblem"><Search size={20} /></div><div><p className="eyebrow">GLOBAL SCOUTING NETWORK</p><strong>{WORLD_PLAYER_COUNT.toLocaleString("en-GB")} players · 20 countries · clubs, academies and free agents</strong><span>Identity is visible to every club. Ability, potential and market value are revealed only after a scout report.</span></div><div className="scout-file-count"><strong>{knownReports}</strong><span>reports in your manager file</span></div></div>
+    <SectionHeading kicker="RECRUITMENT" title="World player database" detail={`Search ${WORLD_PLAYER_COUNT.toLocaleString("en-GB")} players across ${WORLD_PLAYER_COUNTRIES.length} countries. Filter by position, age and nation, then commission a report before ability and potential are revealed.`} action={<div className="budget-pill"><Wallet size={15} /><span>TRANSFER BUDGET</span><strong>{MONEY(club.transferBudget)}</strong></div>} />
+    <div className="world-database-intro"><div className="database-emblem"><Search size={20} /></div><div><p className="eyebrow">GLOBAL SCOUTING NETWORK</p><strong>{WORLD_PLAYER_COUNT.toLocaleString("en-GB")} players · {WORLD_PLAYER_COUNTRIES.length} countries · clubs, academies and free agents</strong><span>Identity is visible to every club. Ability, potential and market value are revealed only after a scout report.</span></div><div className="scout-file-count"><strong>{knownReports}</strong><span>reports in your manager file</span></div></div>
     <section className="panel market-panel world-market-panel">
       <div className="panel-toolbar world-market-toolbar"><div className="market-heading"><div><p className="eyebrow">PLAYER DIRECTORY</p><h2>{filter === "Career clubs" ? "Career clubs" : filter}</h2></div><span>{resultCount.toLocaleString("en-GB")} matching players</span></div><div className="market-search"><Search size={15} /><input aria-label="Search players" placeholder="Name, club, country or position" value={query} onChange={(event) => { setQuery(event.target.value); setPage(0); }} /></div></div>
       <div className="database-filters">{(["All players", "First team", "Academy", "Free agent", "Career clubs"] as const).map((option) => <button key={option} className={filter === option ? "selected" : ""} onClick={() => { setFilter(option); setPage(0); }}>{option}{option !== "Career clubs" && <small>{worldGroupCount(option).toLocaleString("en-GB")}</small>}</button>)}</div>
@@ -742,6 +906,7 @@ function Transfers({ career, setCareer, onPlayerProfile }: { career: Career; set
         const availablePlayer = career.players.find((player) => player.id === listing.id);
         const value = report?.marketValue ?? availablePlayer?.value ?? 0;
         return <article className="database-player" key={listing.id}>
+          <PlayerPortrait id={listing.id} name={listing.name} />
           <span className={`player-position position-${listing.position.toLowerCase()}`}>{listing.position.slice(0, 1)}</span>
           <div className="database-player-main"><div className="database-player-title"><button className="player-profile-link" onClick={() => onPlayerProfile(listing.id)}>{listing.name}</button><span>{listing.age} yrs · {listing.nationality}</span></div><div className="database-player-origin"><span>{listing.clubName}</span><i>·</i><span>{listing.country}</span><i>·</i><span>{listing.group}</span></div></div>
           <div className="database-player-report">{report ? <><strong>ABILITY {report.currentAbility}<b>·</b> POTENTIAL {report.potential}</strong><span>{formatPlayerValue(report.marketValue)} market value</span><small>{report.clubId === club.id ? "MANAGER + CLUB FILE" : "MANAGER FILE"} · S{report.season} MD{report.round}</small></> : <><strong className="ratings-hidden">ABILITY ? <b>·</b> POTENTIAL ?</strong><span>Scout to reveal ratings</span><small>Not yet assessed</small></>}</div>
@@ -795,9 +960,9 @@ function Academy({ career, setCareer, onPlayerProfile }: { career: Career; setCa
   return <><SectionHeading kicker="THE PLAYER PATHWAY" title="Youth academy" detail="A club-built route from first football to first-team minutes, with individual development at every step." action={<span className="clubhouse-city"><GraduationCap size={16} /> ACADEMY LEVEL {club.academyLevel}</span>} />
     <section className="academy-pathway-hero"><div className="academy-pathway-heading"><div><p className="eyebrow">ONE PATH THROUGH THE CLUB</p><h2>Build a player, season by season</h2></div><span>{youth.length} registered prospects</span></div><div className="academy-stage-track">{counts.map((stage, index) => <article className={`academy-stage-card stage-${stage.level.toLowerCase().replaceAll(" ", "-")}`} key={stage.level}><div className="academy-stage-top"><span>{String(index + 1).padStart(2, "0")}</span><strong>{stage.count}</strong></div><small>{stage.phase}</small><h3>{stage.name}</h3><p>{stage.description}</p><div className="stage-age-line"><span>AGES {stage.age}</span><i /></div></article>)}</div><p className="academy-phase-note">Academy ages follow the club’s development phases: foundation learning, youth development and professional development. An early registration is not a senior contract.</p></section>
     <div className="academy-layout"><section className="panel academy-roster"><div className="card-heading"><div><p className="eyebrow">REGISTERED PLAYERS</p><h2>{visiblePlayers.length} in this development group</h2></div><GraduationCap size={18} /></div>{notice && <div className="inline-notice"><Check size={15} />{notice}<button aria-label="Dismiss message" onClick={() => setNotice("")}><X size={13} /></button></div>}<div className="academy-stage-filters">{(["All", ...stages.map((stage) => stage.level)] as ("All" | SquadLevel)[]).map((level) => <button key={level} className={stageFilter === level ? "selected" : ""} onClick={() => setStageFilter(level)}>{level === "All" ? "All ages" : stages.find((stage) => stage.level === level)?.name}</button>)}</div>
-      {visiblePlayers.length ? <div className="youth-player-list">{visiblePlayers.map((player) => <article className="youth-player-card" key={player.id}><div className="youth-player-top"><span className={`player-position position-${player.position.toLowerCase()}`}>{player.position.slice(0, 1)}</span><div className="youth-name"><button className="player-profile-link" onClick={() => onPlayerProfile(player.id)}>{player.name}</button><small>{player.nationality ?? "English"} · Age {player.age} · {stageLabel(player)}</small></div><span className="ovr-badge">{player.overall}</span></div><div className="youth-growth"><div><span>Potential</span><strong>{player.potential}</strong></div><div className="tiny-progress"><i style={{ width: `${Math.min(100, Math.round(player.overall / Math.max(player.potential, 1) * 100))}%` }} /></div><span className="youth-potential-label">{player.potential - player.overall} growth points</span></div><div className="youth-actions"><label>Individual programme<select className="compact-select" value={player.trainingFocus} onChange={(event) => setCareer(setYouthTraining(career, player.id, event.target.value))}>{trainingFor(player).map((option) => <option key={option}>{option}</option>)}</select></label>{eligibleForPromotion(player) ? <button className="button button-secondary button-small" onClick={() => { const next = promoteYouth(career, player.id); setCareer(next); setNotice(next === career ? "This player is not eligible for the next pathway step yet." : `${player.name} advances to the next squad group.`); }}>{promotionLabel(player)}</button> : player.squadLevel === "First team" ? <span className="academy-contract">Senior squad member</span> : <span className="academy-contract">{player.age >= 16 ? "Scholarship agreement" : "Youth development registration"}</span>}</div><div className="academy-player-foot"><span>{player.age < 13 ? "FOUNDATION TRAINING" : player.age < 16 ? "YOUTH DEVELOPMENT" : player.age < 18 ? "SCHOLARSHIP PHASE" : "PROFESSIONAL DEVELOPMENT"}</span><span>RAPPORT {player.managerRapport ?? 55}</span></div></article>)}</div> : <div className="academy-empty"><GraduationCap size={22} /><strong>No players in this age band yet</strong><span>Scouting and future intakes will add prospects to the pathway.</span></div>}
+      {visiblePlayers.length ? <div className="youth-player-list">{visiblePlayers.map((player) => <article className="youth-player-card" key={player.id}><div className="youth-player-top"><PlayerPortrait id={player.id} name={player.name} /><div className="youth-name"><button className="player-profile-link" onClick={() => onPlayerProfile(player.id)}>{player.name}</button><small>{player.nationality ?? "English"} · Age {player.age} · {stageLabel(player)}</small></div><span className="ovr-badge">{player.overall}</span></div><div className="youth-growth"><div><span>Potential</span><strong>{player.potential}</strong></div><div className="tiny-progress"><i style={{ width: `${Math.min(100, Math.round(player.overall / Math.max(player.potential, 1) * 100))}%` }} /></div><span className="youth-potential-label">{player.potential - player.overall} growth points</span></div><div className="youth-actions"><label>Individual programme<select className="compact-select" value={player.trainingFocus} onChange={(event) => setCareer(setYouthTraining(career, player.id, event.target.value))}>{trainingFor(player).map((option) => <option key={option}>{option}</option>)}</select></label>{eligibleForPromotion(player) ? <button className="button button-secondary button-small" onClick={() => { const next = promoteYouth(career, player.id); setCareer(next); setNotice(next === career ? "This player is not eligible for the next pathway step yet." : `${player.name} advances to the next squad group.`); }}>{promotionLabel(player)}</button> : player.squadLevel === "First team" ? <span className="academy-contract">Senior squad member</span> : <span className="academy-contract">{player.age >= 16 ? "Scholarship agreement" : "Youth development registration"}</span>}</div><div className="academy-player-foot"><span>{player.age < 13 ? "FOUNDATION TRAINING" : player.age < 16 ? "YOUTH DEVELOPMENT" : player.age < 18 ? "SCHOLARSHIP PHASE" : "PROFESSIONAL DEVELOPMENT"}</span><span>RAPPORT {player.managerRapport ?? 55}</span></div></article>)}</div> : <div className="academy-empty"><GraduationCap size={22} /><strong>No players in this age band yet</strong><span>Scouting and future intakes will add prospects to the pathway.</span></div>}
       <div className="table-footer"><span>Training carries on each matchday.</span><span>Age, potential, development plan and squad level shape a player’s progress.</span></div>
-    </section><aside className="panel academy-investment"><div className="card-heading"><div><p className="eyebrow">RECRUITMENT & FACILITIES</p><h2>Find the next prospect</h2></div><Search size={18} /></div><div className="academy-highlight"><strong>{candidates.length} unattached prospects</strong><p>Scout a prospect before their ability and potential are revealed. A young player begins on development registration; scholarship terms arrive at 16.</p></div>{candidates.length ? <div className="academy-candidate-list">{candidates.slice(0, 6).map((player) => { const fee = 8_000 + player.age * 3_500 + club.academyLevel * 4_000; const report = getScoutingReport(career, player.id); const reportCost = getScoutingCost(career, player.id); return <article className="academy-candidate" key={player.id}><span className={`player-position position-${player.position.toLowerCase()}`}>{player.position.slice(0, 1)}</span><div><button className="player-profile-link" onClick={() => onPlayerProfile(player.id)}>{player.name}</button><small>{player.nationality ?? "English"} · Age {player.age} · {stageLabel(player)}</small><span>{report ? <>Potential <b>{report.potential}</b> · OVR {report.currentAbility}</> : "Ability and potential unknown"}</span></div>{report ? <button className="button button-secondary button-small" onClick={() => signProspect(player)} disabled={club.balance < fee}>{MONEY(fee)} · Sign</button> : <button className="button button-primary button-small" onClick={() => scoutProspect(player)} disabled={club.balance < reportCost}>Scout · {MONEY(reportCost)}</button>}</article>; })}</div> : <div className="academy-empty academy-candidate-empty"><Check size={19} /><strong>Scout pool clear</strong><span>New youth prospects arrive each season.</span></div>}<div className="academy-invest-divider"><p className="eyebrow">INVEST IN THE PATHWAY</p><div className="academy-invest-stat"><span>Next intake</span><strong>{2 + club.academyLevel} players</strong><small>Arrives at the end of each season</small></div><button className="button button-primary button-wide" onClick={upgrade} disabled={club.academyLevel >= 5}>{club.academyLevel >= 5 ? "Academy at maximum level" : `Improve academy · ${MONEY((club.academyLevel + 1) * 225000)}`}<Building2 size={15} /></button></div><p className="muted academy-footnote">A stronger academy increases intake size. Individual plans, age and match experience affect development.</p></aside></div>
+    </section><aside className="panel academy-investment"><div className="card-heading"><div><p className="eyebrow">RECRUITMENT & FACILITIES</p><h2>Find the next prospect</h2></div><Search size={18} /></div><div className="academy-highlight"><strong>{candidates.length} unattached prospects</strong><p>Scout a prospect before their ability and potential are revealed. A young player begins on development registration; scholarship terms arrive at 16.</p></div>{candidates.length ? <div className="academy-candidate-list">{candidates.slice(0, 6).map((player) => { const fee = 8_000 + player.age * 3_500 + club.academyLevel * 4_000; const report = getScoutingReport(career, player.id); const reportCost = getScoutingCost(career, player.id); return <article className="academy-candidate" key={player.id}><PlayerPortrait id={player.id} name={player.name} /><div><button className="player-profile-link" onClick={() => onPlayerProfile(player.id)}>{player.name}</button><small>{player.nationality ?? "English"} · Age {player.age} · {stageLabel(player)}</small><span>{report ? <>Potential <b>{report.potential}</b> · OVR {report.currentAbility}</> : "Ability and potential unknown"}</span></div>{report ? <button className="button button-secondary button-small" onClick={() => signProspect(player)} disabled={club.balance < fee}>{MONEY(fee)} · Sign</button> : <button className="button button-primary button-small" onClick={() => scoutProspect(player)} disabled={club.balance < reportCost}>Scout · {MONEY(reportCost)}</button>}</article>; })}</div> : <div className="academy-empty academy-candidate-empty"><Check size={19} /><strong>Scout pool clear</strong><span>New youth prospects arrive each season.</span></div>}<div className="academy-invest-divider"><p className="eyebrow">INVEST IN THE PATHWAY</p><div className="academy-invest-stat"><span>Next intake</span><strong>{2 + club.academyLevel} players</strong><small>Arrives at the end of each season</small></div><button className="button button-primary button-wide" onClick={upgrade} disabled={club.academyLevel >= 5}>{club.academyLevel >= 5 ? "Academy at maximum level" : `Improve academy · ${MONEY((club.academyLevel + 1) * 225000)}`}<Building2 size={15} /></button></div><p className="muted academy-footnote">A stronger academy increases intake size. Individual plans, age and match experience affect development.</p></aside></div>
   </>;
 }
 function Commercial({ career, setCareer }: { career: Career; setCareer: (career: Career) => void }) {

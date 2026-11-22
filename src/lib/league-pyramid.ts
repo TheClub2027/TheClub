@@ -1,13 +1,15 @@
-export type LeagueId = "premier" | "championship" | "league-one" | "league-two" | "national" | "national-north" | "national-south";
+import { worldLeagueById } from "./world-leagues";
+
+export type LeagueId = string;
 
 export type LeagueDefinition = {
   id: LeagueId;
   name: string;
-  country: "England";
+  country: string;
   tier: number;
   clubs: number;
   rounds: number;
-  region: "National" | "North" | "South";
+  region: string;
   promotionPlaces: number;
   relegationPlaces: number;
   automaticPromotion: number;
@@ -32,30 +34,31 @@ export type ClubSeed = {
   reputation: number;
   colors: [string, string];
   capacity: number;
-  leagueId: LeagueId;
+  leagueId: string;
   region: string;
+  country?: string;
 };
 
 const LEGACY_SEEDS: ClubSeed[] = [
-  { name: "Northport Athletic", short: "NPA", city: "Northport", reputation: 76, colors: ["#13a38a", "#f2f5f3"], capacity: 24600, leagueId: "premier", region: "North Coast" },
-  { name: "Halloway City", short: "HLC", city: "Halloway", reputation: 73, colors: ["#293b73", "#d3b564"], capacity: 22100, leagueId: "premier", region: "South East" },
-  { name: "Kingshaven FC", short: "KHF", city: "Kingshaven", reputation: 70, colors: ["#c94b43", "#f4eee6"], capacity: 18400, leagueId: "premier", region: "East Midlands" },
-  { name: "Eastmere Town", short: "EMT", city: "Eastmere", reputation: 68, colors: ["#176e9e", "#e9f0f4"], capacity: 15700, leagueId: "premier", region: "East Anglia" },
-  { name: "Brackenford", short: "BRK", city: "Brackenford", reputation: 66, colors: ["#cf6c35", "#f6f1e8"], capacity: 14300, leagueId: "championship", region: "West Midlands" },
-  { name: "Alderwich Rovers", short: "ALR", city: "Alderwich", reputation: 64, colors: ["#514383", "#f0e7ad"], capacity: 12800, leagueId: "championship", region: "North West" },
-  { name: "Westport Rovers", short: "WPR", city: "Westport", reputation: 62, colors: ["#12a389", "#eef5f2"], capacity: 9100, leagueId: "league-one", region: "South West" },
-  { name: "Calder Vale", short: "CDV", city: "Calder Vale", reputation: 60, colors: ["#728e41", "#e8e7d5"], capacity: 8800, leagueId: "league-one", region: "Yorkshire" },
-  { name: "Merechester Albion", short: "MCA", city: "Merechester", reputation: 58, colors: ["#b33b43", "#d8b647"], capacity: 8200, leagueId: "league-two", region: "North West" },
-  { name: "Redcliffe Borough", short: "RCB", city: "Redcliffe", reputation: 56, colors: ["#762d3b", "#e9e3d9"], capacity: 7700, leagueId: "league-two", region: "South East" },
-  { name: "Wickford Vale", short: "WKV", city: "Wickford", reputation: 54, colors: ["#37636e", "#efe9dc"], capacity: 7100, leagueId: "national", region: "South Coast" },
-  { name: "Southbank United", short: "SBU", city: "Southbank", reputation: 52, colors: ["#d79837", "#263a4d"], capacity: 6400, leagueId: "national-south", region: "South East" },
+  { name: "Northport Athletic", short: "NPA", city: "Northport", reputation: 76, colors: ["#13a38a", "#f2f5f3"], capacity: 55_000, leagueId: "premier", region: "North Coast" },
+  { name: "Halloway City", short: "HLC", city: "Halloway", reputation: 73, colors: ["#293b73", "#d3b564"], capacity: 47_500, leagueId: "premier", region: "South East" },
+  { name: "Kingshaven FC", short: "KHF", city: "Kingshaven", reputation: 70, colors: ["#c94b43", "#f4eee6"], capacity: 40_000, leagueId: "premier", region: "East Midlands" },
+  { name: "Eastmere Town", short: "EMT", city: "Eastmere", reputation: 68, colors: ["#176e9e", "#e9f0f4"], capacity: 34_000, leagueId: "premier", region: "East Anglia" },
+  { name: "Brackenford", short: "BRK", city: "Brackenford", reputation: 66, colors: ["#cf6c35", "#f6f1e8"], capacity: 29_000, leagueId: "championship", region: "West Midlands" },
+  { name: "Alderwich Rovers", short: "ALR", city: "Alderwich", reputation: 64, colors: ["#514383", "#f0e7ad"], capacity: 25_000, leagueId: "championship", region: "North West" },
+  { name: "Westport Rovers", short: "WPR", city: "Westport", reputation: 62, colors: ["#12a389", "#eef5f2"], capacity: 19_000, leagueId: "league-one", region: "South West" },
+  { name: "Calder Vale", short: "CDV", city: "Calder Vale", reputation: 60, colors: ["#728e41", "#e8e7d5"], capacity: 16_000, leagueId: "league-one", region: "Yorkshire" },
+  { name: "Merechester Albion", short: "MCA", city: "Merechester", reputation: 72, colors: ["#b33b43", "#d8b647"], capacity: 24_600, leagueId: "league-two", region: "North West" },
+  { name: "Redcliffe Borough", short: "RCB", city: "Redcliffe", reputation: 68, colors: ["#762d3b", "#e9e3d9"], capacity: 20_000, leagueId: "league-two", region: "South East" },
+  { name: "Wickford Vale", short: "WKV", city: "Wickford", reputation: 54, colors: ["#37636e", "#efe9dc"], capacity: 9_000, leagueId: "national", region: "South Coast" },
+  { name: "Southbank United", short: "SBU", city: "Southbank", reputation: 52, colors: ["#d79837", "#263a4d"], capacity: 8_000, leagueId: "national-south", region: "South East" },
 ];
 
 const ROOTS: Record<LeagueId, string[]> = {
-  premier: ["Arden", "Ashcombe", "Bellmere", "Calder", "Crown", "Dunley", "Eastmere", "Fallow", "Glenhaven", "Kings", "Longford", "Merefield", "Northgate", "Oakbridge", "Ravenswick", "Silverton", "Southwell", "Westhaven", "Whitcombe", "Wrenford"],
-  championship: ["Alder", "Amberley", "Bramble", "Bracken", "Clayburn", "Crowley", "Dale", "Elder", "Fenwick", "Foxmere", "Hartley", "Hawthorn", "Highmoor", "Larkston", "Lowford", "Marshfield", "Rookhaven", "Stoneleigh", "Thornby", "Valeham", "Westerby", "Willowbank", "Woldhurst", "Wychford"],
-  "league-one": ["Averton", "Brierley", "Calderby", "Cinderford", "Cleeham", "Crossfell", "Dunbarrow", "Elmstead", "Firtham", "Greenwick", "Greyhaven", "Harebridge", "Hollowmere", "Ironwell", "Kirkstead", "Moorleigh", "Northwick", "Redmarsh", "Rillford", "Sableton", "Thornfield", "Westmere", "Whitburn", "Yarrowby"],
-  "league-two": ["Appleby", "Ashwell", "Bellwick", "Borougham", "Brackenby", "Cedarfield", "Charnley", "Crowcombe", "Deepwell", "Eastwick", "Fairhaven", "Frostley", "Glenford", "Havenby", "Kingsmere", "Lowbridge", "Mallowick", "Northleigh", "Oldenham", "Ravenby", "Riverstead", "Stonehaven", "Wickmere", "Woodley"],
+  premier: ["Arden", "Beacon Cross", "Bellmere", "Calder", "Crown Fell", "Dunley", "Eastmere", "Fallow", "Glenhaven", "High Barrow", "Inverleigh", "Kings", "Longridge", "Merefield", "Northgate", "Oakbridge", "Raven Mills", "Silverton", "Tern Bay", "Wold End"],
+  championship: ["Alder Downs", "Amber Quay", "Bramble", "Charnwood", "Clayburn", "Crowley", "Dale End", "Deepwater", "Elder", "Fenwick", "Fox Hollow", "Hartley", "Hawthorn", "Iron Moor", "Juniper Gate", "Larkston", "Marshfield", "Old Quay", "Rookhaven", "Stoneleigh", "Thornby", "Valeham", "Willowbank", "Yardley Green"],
+  "league-one": ["Ashbarrow", "Brierley", "Calderby", "Cinderford", "Cleeham", "Crossfell", "Dunbarrow", "East Bridge", "Elmstead", "Farring", "Firtham", "Gallowmere", "Greyhaven", "Harebridge", "Ironwell", "Kirkstead", "Little Marlow", "Moorleigh", "Northwick", "Old Harth", "Pinehurst", "Redmarsh", "Rillford", "Sableton"],
+  "league-two": ["Appleby", "Ashdown", "Belltower", "Brackenby", "Cedarfield", "Charnley", "Coal Harbour", "Crowcombe", "Deepwell", "Eastwell", "Frostley", "Glenmoor", "Harbour End", "Havenby", "Kingsmere", "Long Quarry", "Mallowick", "Northleigh", "Oldenham", "Ravenby", "Riverstead", "Stonehaven", "Wickmere", "Woodley"],
   national: ["Aldermere", "Bramblewick", "Cairnford", "Cloverham", "Dalehurst", "Dunhaven", "Eastcombe", "Fellbridge", "Ferrywell", "Gorseby", "Hartswell", "Hazelwick", "Longmere", "Millfield", "Moorcombe", "Ridgehaven", "Rookfield", "Sandhurst", "Southmere", "Thistledown", "Westcombe", "Wicklow", "Willowmere", "Yewford"],
   "national-north": ["Aldershaw", "Ashbank", "Blackthorn", "Brackenfell", "Caldershaw", "Chapelwick", "Cragmere", "Duncombe", "Fellside", "Frostwick", "Glenridding", "Greyfell", "Kirkbridge", "Moorhead", "Northfell", "Oakworth", "Redwick", "Ribbleton", "Rookshaw", "Stonebeck", "Thornwick", "Westfell", "Whitby Vale", "Wrenmoor"],
   "national-south": ["Amberwick", "Applecombe", "Ashleigh", "Bellport", "Brambleton", "Broadwick", "Chilford", "Cranmere", "Elmbridge", "Fairwick", "Fernhurst", "Gorsefield", "Havenleigh", "Kingscombe", "Larkspur", "Maplehurst", "Oakleigh", "Pinewick", "Redhaven", "Sandcombe", "Southwick", "Tideford", "Westleigh", "Wychmere"],
@@ -119,8 +122,7 @@ function makeClubSeeds(): ClubSeed[] {
       let city = "";
       for (let attempt = 0; attempt < roots.length * 3; attempt += 1) {
         const root = roots[(index + attempt) % roots.length];
-        const ending = ["wick", "ford", "mere", "haven", "field", "bridge", "mouth", "port", "ton", "borough", "combe", "ley", "ham", "stead", "well", "by"][Math.floor((index + attempt) / roots.length) % 16];
-        const proposed = root.endsWith(ending) ? root : `${root}${ending}`;
+        const proposed = root;
         if (!usedCities.has(proposed.toLowerCase())) { city = proposed; break; }
       }
       if (!city) city = `${roots[index % roots.length]} ${index + 1}`;
@@ -142,7 +144,9 @@ function makeClubSeeds(): ClubSeed[] {
       const reputation = Math.max(20, Math.min(90, areaRep + Math.round((league.clubs - 1 - generatedIndex) * (leagueIndex === 0 ? 0.55 : 0.35)) - Math.round((index % 5) * 0.9)));
       const base = [...city.toUpperCase().replace(/[^A-Z]/g, "")].slice(0, 3).join("");
       const short = `${base || "ENG"}${String(globalIndex + 1).padStart(3, "0")}`;
-      const capacity = Math.max(5_500, Math.round((3_800 + reputation * 265 + (globalIndex % 7) * 430) / 100) * 100);
+      const capacityBase = [24_000, 10_000, 6_000, 4_000, 3_800, 3_500, 3_500][leagueIndex];
+      const capacityPerReputation = [350, 300, 260, 230, 200, 160, 160][leagueIndex];
+      const capacity = Math.max(5_500, Math.round((capacityBase + reputation * capacityPerReputation + (globalIndex % 7) * 550) / 100) * 100);
       tierSeeds.push({ name, short, city, reputation, colors: colorFor(globalIndex, leagueIndex), capacity, leagueId: league.id, region });
     }
     for (const [index, seed] of tierSeeds.entries()) {
@@ -156,5 +160,5 @@ function makeClubSeeds(): ClubSeed[] {
 export const ENGLISH_CLUB_SEEDS = makeClubSeeds();
 
 export function leagueDefinition(id: string | undefined) {
-  return ENGLISH_LEAGUES.find((league) => league.id === id) ?? ENGLISH_LEAGUES[0];
+  return ENGLISH_LEAGUES.find((league) => league.id === id) ?? worldLeagueById(id ?? "") ?? ENGLISH_LEAGUES[0];
 }

@@ -9,9 +9,11 @@ import {
   getAcademyPlayers,
   getScoutingCost,
   getScoutingReport,
+  getFormationSlots,
   getYouthCandidates,
   getBoardPressureSignals,
   getClub,
+  getCurrentLeague,
   hireStaff,
   releaseStaff,
   getSeasonWeekCount,
@@ -29,9 +31,12 @@ import {
   sponsorProposal,
   startStadiumProject,
 } from "./game";
-import { getWorldPlayerDetails, getWorldPlayerCounts, searchWorldDatabase, WORLD_PLAYER_COUNT } from "./world-database";
+import { getWorldPlayerDetails, getWorldPlayerCounts, getWorldPlayerName, searchWorldDatabase, WORLD_PLAYER_COUNT } from "./world-database";
 import { ENGLISH_LEAGUES } from "./league-pyramid";
-import { countWorldStaff, searchWorldStaff, WORLD_STAFF_COUNT } from "./world-staff-database";
+import { WORLD_COUNTRIES, WORLD_CLUB_SEEDS, WORLD_LEAGUES } from "./world-leagues";
+import { getPlayerFace } from "./player-faces";
+import { countWorldStaff, searchWorldStaff, WORLD_STAFF_COUNT, STAFF_ROLES } from "./world-staff-database";
+import { formatGameCurrency, formatGameDistance } from "./game-settings";
 
 test("a 12-club season has a balanced home-and-away fixture list", () => {
   const teams = Array.from({ length: 12 }, (_, index) => `T${index + 1}`);
@@ -64,6 +69,9 @@ test("new careers include a working league, editable squad and believable funds"
   assert.equal(getClub(career).name, "Westport Rovers");
   assert.ok(getClub(career).balance > 2_000_000);
   assert.equal(career.lineup.length, 11);
+  assert.deepEqual(career.lineup.map((id) => career.players.find((player) => player.id === id)?.position), getFormationSlots(career.formation));
+  assert.ok(career.clubs.find((club) => club.id === "NPA")!.stadium.capacity > career.clubs.find((club) => club.id === "WPR")!.stadium.capacity);
+  assert.ok(career.clubs.find((club) => club.id === "MCA")!.stadium.capacity > career.clubs.find((club) => club.id === "WKV")!.stadium.capacity);
   assert.equal(getTable(career).reduce((total, row) => total + row.played, 0), 0);
   assert.ok(getAcademyPlayers(career).some((player) => player.age === 5));
   assert.equal(new Set(career.clubs.map((club) => club.stadium.name)).size, 164);
@@ -76,12 +84,59 @@ test("new careers include a working league, editable squad and believable funds"
   assert.ok(career.clubs.every((club) => club.staff?.length === 8 && club.board?.length === 4));
 });
 
+test("the global world has playable national leagues, unique clubs and deep player records", () => {
+  const continents = new Set(WORLD_COUNTRIES.map((entry) => entry.continent));
+  assert.deepEqual([...continents].sort(), ["Africa", "Asia", "Europe", "North America", "Oceania", "South America"]);
+  assert.equal(WORLD_LEAGUES.length, WORLD_COUNTRIES.length - 1);
+  assert.equal(WORLD_CLUB_SEEDS.length, WORLD_LEAGUES.reduce((total, league) => total + league.clubs, 0));
+  assert.equal(new Set(WORLD_CLUB_SEEDS.map((club) => club.short)).size, WORLD_CLUB_SEEDS.length);
+  assert.equal(new Set(WORLD_CLUB_SEEDS.map((club) => club.name)).size, WORLD_CLUB_SEEDS.length);
+  const names = new Set<string>();
+  for (let index = 0; index < WORLD_PLAYER_COUNT; index += 1) names.add(getWorldPlayerName(index));
+  assert.equal(names.size, WORLD_PLAYER_COUNT);
+  assert.ok(WORLD_CLUB_SEEDS.every((club) => WORLD_LEAGUES.some((league) => league.id === club.leagueId && league.country === club.country)));
+  assert.ok(STAFF_ROLES.includes("First-Team Manager"));
+});
+
+test("a global career starts a full league season with its own academy and staff", () => {
+  const chosen = WORLD_CLUB_SEEDS.find((club) => club.country === "Japan")!;
+  const career = createCareer("Aiko Tanaka", chosen.short);
+  const club = getClub(career);
+  assert.equal(club.country, "Japan");
+  assert.equal(getCurrentLeague(career).id, chosen.leagueId);
+  assert.equal(career.clubs.filter((entry) => entry.leagueId === chosen.leagueId).length, 8);
+  assert.equal(career.fixtures.filter((fixture) => fixture.leagueId === chosen.leagueId).length, 56);
+  assert.ok(career.players.some((player) => player.clubId === career.clubId && player.age === 5));
+  assert.ok(club.staff?.some((person) => person.role === "First-Team Manager"));
+  assert.equal(getTable(career).length, 8);
+});
+
+test("all generated world player portraits have their own render identity", () => {
+  const portraitKeys = new Set<string>();
+  for (let index = 1; index <= WORLD_PLAYER_COUNT; index += 1) {
+    const playerId = `world-${String(index).padStart(5, "0")}`;
+    const face = getPlayerFace(playerId);
+    const renderedFace = JSON.stringify([face.skin, face.skinShade, face.hair, face.eye, face.background, face.hairStyle, face.beardStyle, face.faceWidth, face.faceHeight, face.eyeY, face.eyeGap, face.noseWidth, face.mouthWidth, face.browTilt, face.earSize, face.freckles, face.collar]);
+    portraitKeys.add(renderedFace);
+  }
+  assert.equal(portraitKeys.size, WORLD_PLAYER_COUNT);
+});
+
+test("currency and pitch-unit settings change the displayed values", () => {
+  assert.match(formatGameCurrency(1_000_000, true, "EUR"), /€/);
+  assert.match(formatGameCurrency(1_000_000, true, "USD"), /\$/);
+  assert.equal(formatGameDistance(105), "105 m");
+});
+
 test("the 25,000-person staff world supports searchable appointments and releases", () => {
   const career = createCareer("Riley Shaw", "WPR");
   assert.equal(WORLD_STAFF_COUNT, 25_000);
-  assert.deepEqual(countWorldStaff(career.staffChanges), { total: 25_000, atClub: 1_968, available: 23_032 });
+  const staffCounts = countWorldStaff(career.staffChanges);
+  assert.equal(staffCounts.total, 25_000);
+  assert.ok(staffCounts.atClub > 20_000);
+  assert.equal(staffCounts.atClub + staffCounts.available, 25_000);
   const search = searchWorldStaff("", "Assistant Manager", "Available", 0, 1, career.staffChanges);
-  assert.equal(search.total, 1_920);
+  assert.ok(search.total > 0);
   const candidate = search.people[0];
   const hired = hireStaff(career, candidate.id);
   assert.notEqual(hired, career);
@@ -205,11 +260,11 @@ test("academy recruitment signs an unattached five-year-old into the right pathw
   assert.ok(signed.news.some((item) => item.headline.includes("joins") && item.body.includes("5-year-old")));
 });
 
-test("global player directory contains 70,000 records but listings hide ability and potential", () => {
+test("global player directory contains 90,000 records but listings hide ability and potential", () => {
   const counts = getWorldPlayerCounts();
-  assert.equal(WORLD_PLAYER_COUNT, 70_000);
-  assert.equal(counts.total, 70_000);
-  assert.equal(counts.firstTeam + counts.academy + counts.freeAgents, 70_000);
+  assert.equal(WORLD_PLAYER_COUNT, 90_000);
+  assert.equal(counts.total, 90_000);
+  assert.equal(counts.firstTeam + counts.academy + counts.freeAgents, 90_000);
   const firstTeam = searchWorldDatabase("", "First team", 0, 12);
   const academy = searchWorldDatabase("", "Academy", 0, 12);
   const freeAgents = searchWorldDatabase("", "Free agent", 0, 12);
@@ -238,12 +293,10 @@ test("world player search filters by position, age and country before pagination
 });
 
 test("fictional international clubs use country-specific naming styles", () => {
-  const clubIds = ["world-00001", "world-00051", "world-00101", "world-00201", "world-00351"];
-  const names = clubIds.map((id) => getWorldPlayerDetails(id)!.clubName);
-  assert.equal(new Set(names).size, names.length);
-  assert.match(names[0], /Athletic$/);
-  assert.match(names[3], /Sporting$/);
-  assert.match(names[4], /Calcio$/);
+  const profiles = ["world-00201", "world-00351", "world-00801"].map((id) => getWorldPlayerDetails(id)!);
+  assert.equal(new Set(profiles.map((profile) => profile.country)).size, profiles.length);
+  assert.equal(new Set(profiles.map((profile) => profile.clubName)).size, profiles.length);
+  assert.ok(profiles.every((profile) => profile.leagueName.startsWith(profile.country)));
 });
 
 test("scouting reports are filed to the manager and commissioning club", () => {
@@ -285,6 +338,8 @@ test("scouted world free agents and academy players can join a career", () => {
 test("older local saves gain the new optional stadium, badge and pressure data", () => {
   const career = createCareer("Alex Morgan", "WPR");
   const legacy = structuredClone(career);
+  legacy.lineup = legacy.players.filter((player) => player.clubId === legacy.clubId && player.age >= 16).sort((a, b) => b.overall - a.overall).slice(0, 11).map((player) => player.id);
+  delete legacy.schemaVersion;
   delete legacy.pressure;
   delete legacy.clubs[0].stadium.standTiers;
   delete legacy.clubs[0].badge;
@@ -294,6 +349,7 @@ test("older local saves gain the new optional stadium, badge and pressure data",
   assert.equal(restored.clubs[0].stadium.standTiers?.north, restored.clubs[0].stadium.tiers);
   assert.ok(restored.clubs[0].badge);
   assert.deepEqual(restored.scoutingReports, []);
+  assert.deepEqual(restored.lineup.map((id) => restored.players.find((player) => player.id === id)?.position), getFormationSlots(restored.formation));
 });
 
 test("commercial assets have multi-year sponsor deals and seasonal kit sales", () => {

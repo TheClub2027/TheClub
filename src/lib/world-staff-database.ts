@@ -1,7 +1,9 @@
 import { ENGLISH_CLUB_SEEDS } from "./league-pyramid";
+import { WORLD_CLUB_SEEDS } from "./world-leagues";
 
 export const WORLD_STAFF_COUNT = 25_000;
-export const BASE_CLUB_STAFF_COUNT = ENGLISH_CLUB_SEEDS.length * 12;
+const STAFF_CLUB_SEEDS = [...ENGLISH_CLUB_SEEDS, ...WORLD_CLUB_SEEDS];
+export const BASE_CLUB_STAFF_COUNT = STAFF_CLUB_SEEDS.length * 12;
 
 export const STAFF_ROLES = [
   "Assistant Manager",
@@ -11,7 +13,7 @@ export const STAFF_ROLES = [
   "Head Physio",
   "Head Scout",
   "Academy Director",
-  "Performance Analyst",
+  "First-Team Manager",
   "Chairperson",
   "Sporting Director",
   "Finance Director",
@@ -44,13 +46,13 @@ const NATIONALITIES = ["English", "Scottish", "Welsh", "Irish", "French", "Germa
 const REGIONS = ["North West", "Yorkshire", "North East", "East Midlands", "West Midlands", "East Anglia", "London", "South East", "South Coast", "South West", "Wales", "Scotland", "Ireland", "Western Europe", "West Africa", "North America", "East Asia"];
 const FOCUSES: Record<StaffRole, string[]> = {
   "Assistant Manager": ["Man management", "Tactical preparation", "Match analysis"],
+  "First-Team Manager": ["Squad leadership", "Tactical identity", "Player development"],
   "First-Team Coach": ["Technical development", "Possession play", "Attacking patterns"],
   "Goalkeeping Coach": ["Shot stopping", "Distribution", "Set-piece organisation"],
   "Fitness Coach": ["Conditioning", "Recovery", "Athletic development"],
   "Head Physio": ["Injury prevention", "Rehabilitation", "Player welfare"],
   "Head Scout": ["Domestic recruitment", "International scouting", "Data-led recruitment"],
   "Academy Director": ["Youth pathway", "Talent identification", "Scholar development"],
-  "Performance Analyst": ["Opposition reports", "Set pieces", "Match data"],
   Chairperson: ["Club strategy", "Community ownership", "Investment"],
   "Sporting Director": ["Squad planning", "Football operations", "Recruitment"],
   "Finance Director": ["Budget control", "Commercial growth", "Infrastructure"],
@@ -60,8 +62,8 @@ const FOCUSES: Record<StaffRole, string[]> = {
 function makeWorldStaff(index: number): StaffMember {
   const roleIndex = index % STAFF_ROLES.length;
   const role = STAFF_ROLES[roleIndex];
-  const clubIndex = Math.floor(index / 12);
-  const seed = ENGLISH_CLUB_SEEDS[clubIndex];
+  const clubIndex = Math.floor(index / STAFF_ROLES.length);
+  const seed = STAFF_CLUB_SEEDS[clubIndex];
   const employed = index < BASE_CLUB_STAFF_COUNT && Boolean(seed);
   const age = 25 + ((index * 17 + Math.floor(index / 8)) % 43);
   const ability = 39 + ((index * 29 + Math.floor(index / 17) * 7) % 58);
@@ -73,7 +75,7 @@ function makeWorldStaff(index: number): StaffMember {
     name: `${FIRST_NAMES[(index * 13 + 7) % FIRST_NAMES.length]} ${LAST_NAMES[(index * 31 + Math.floor(index / FIRST_NAMES.length) * 7) % LAST_NAMES.length]}`,
     role,
     age,
-    nationality: employed ? "English" : NATIONALITIES[(index * 19 + Math.floor(index / 7)) % NATIONALITIES.length],
+    nationality: employed ? seed!.country ?? "English" : NATIONALITIES[(index * 19 + Math.floor(index / 7)) % NATIONALITIES.length],
     region: employed ? seed!.region : REGIONS[(index * 17 + Math.floor(index / 12)) % REGIONS.length],
     experience: Math.max(1, age - 22),
     ability,
@@ -98,6 +100,11 @@ export function createClubPersonnel(clubId: string, clubName: string, startIndex
     return { ...WORLD_STAFF[index], clubId, clubName };
   });
   return { staff: people.slice(0, 8), board: people.slice(8) };
+}
+
+export function staffStartIndexForClub(clubId: string) {
+  const clubIndex = STAFF_CLUB_SEEDS.findIndex((club) => club.short === clubId);
+  return Math.max(0, clubIndex) * STAFF_ROLES.length;
 }
 
 export type StaffSearchRole = StaffRole | "All roles";

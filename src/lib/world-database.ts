@@ -1,8 +1,10 @@
 import type { AcademyRecord, Player, PlayerAttributes, PlayerClubRecord, PlayerStats, Position, SquadLevel } from "./game";
+import { ENGLISH_CLUB_SEEDS } from "./league-pyramid";
+import { WORLD_CLUB_SEEDS, WORLD_COUNTRIES, WORLD_LEAGUES, type WorldContinent } from "./world-leagues";
 
-export const WORLD_PLAYER_COUNT = 70_000;
-export const WORLD_FIRST_TEAM_COUNT = 50_000;
-export const WORLD_ACADEMY_COUNT = 15_000;
+export const WORLD_PLAYER_COUNT = 90_000;
+export const WORLD_FIRST_TEAM_COUNT = 60_000;
+export const WORLD_ACADEMY_COUNT = 22_500;
 export const WORLD_FREE_AGENT_COUNT = WORLD_PLAYER_COUNT - WORLD_FIRST_TEAM_COUNT - WORLD_ACADEMY_COUNT;
 
 export type WorldPlayerGroup = "First team" | "Academy" | "Free agent";
@@ -17,6 +19,8 @@ export type WorldPlayerListing = {
   clubId: string | null;
   clubName: string;
   country: string;
+  continent: WorldContinent;
+  leagueName: string;
   group: WorldPlayerGroup;
 };
 
@@ -24,52 +28,7 @@ export type WorldPlayerDetail = WorldPlayerListing & Pick<Player, "overall" | "p
 export type WorldPlayerCriteria = { position?: Position | "Any"; minAge?: number; maxAge?: number; country?: string | "All countries" };
 export type WorldSearchPage = { players: WorldPlayerListing[]; hasMore: boolean; total: number };
 
-const COUNTRIES = [
-  { country: "England", league: "National Premier", cities: ["Aldervane", "Bramblefen", "Cinderwych", "Dunserra", "Eldermere", "Fallowden", "Glenrith", "Hartbrith"] },
-  { country: "Scotland", league: "Caledonian League", cities: ["Averenloch", "Braevenn", "Cairneth", "Dunvessa", "Eldbroch", "Fyrmuir", "Glenvorn", "Inverrith"] },
-  { country: "Wales", league: "Cymru Premier", cities: ["Bryneth", "Cwmvael", "Delyrwyn", "Eirneth", "Gwaelwyn", "Llanver", "Morfelyn", "Trevalith"] },
-  { country: "Ireland", league: "Emerald Division", cities: ["Aderwen", "Ballyvara", "Cloinneth", "Dunrath", "Kilvessa", "Lirrin", "Moycarran", "Rathvane"] },
-  { country: "France", league: "Ligue Nationale", cities: ["Auvrenne", "Belarive", "Coudrelle", "Douvrienne", "Faleroux", "Montelisse", "Rouvienne", "Valessine"] },
-  { country: "Spain", league: "Liga Nacional", cities: ["Almavela", "Bellorva", "Cielorva", "Dorasena", "Estavira", "Fuentara", "Montelba", "Puertalia"] },
-  { country: "Germany", league: "Bundesliga Nord", cities: ["Alderbrunn", "Brenzfeld", "Dornethal", "Eichenroth", "Falkenweld", "Hohenreith", "Lindenbrath", "Waldvenn"] },
-  { country: "Italy", league: "Serie Nazionale", cities: ["Bellavento", "Castelriva", "Fonteluna", "Grazella", "Montessera", "Portelume", "San Virello", "Valdessa"] },
-  { country: "Netherlands", league: "Eerste Divisie", cities: ["Aarderveld", "Bergdoorn", "Dijkaard", "Eikenvard", "Havenrijn", "Lindenzicht", "Oosterveld", "Veldhaven"] },
-  { country: "Portugal", league: "Liga Atlântica", cities: ["Almoriva", "Beiravento", "Costavela", "Douracel", "Figueiro", "Maraluz", "Portaleva", "Valedouro"] },
-  { country: "Belgium", league: "Division Royale", cities: ["Avermont", "Belcenne", "Dourval", "Everselle", "Fernelune", "Grezanne", "Mouvrille", "Westerive"] },
-  { country: "Denmark", league: "Nordic Superliga", cities: ["Aalvorn", "Bjorlinde", "Egeval", "Fredersund", "Halmere", "Lindovik", "Sonderlin", "Vestereng"] },
-  { country: "Norway", league: "Fjord League", cities: ["Austvorn", "Berglune", "Fjellvarden", "Havneskeld", "Nordvessa", "Solviken", "Vestmaren", "Vikvorn"] },
-  { country: "Sweden", league: "Allsvenskan North", cities: ["Alverum", "Bjorlinda", "Dalskarn", "Falkenyl", "Hammarviken", "Ljungve", "Soderlind", "Valloren"] },
-  { country: "Poland", league: "Liga Krajowa", cities: ["Bialenow", "Czarnovia", "Dabrelow", "Jasnovia", "Lesnivo", "Nowarzeka", "Sokolven", "Wierzbor"] },
-  { country: "Austria", league: "Alpenliga", cities: ["Alpenried", "Birkental", "Falkenried", "Hohenwies", "Lindenwies", "Morgenfeld", "Steinbrunn", "Talraven"] },
-  { country: "Switzerland", league: "Challenge National", cities: ["Alpenroth", "Bergwelle", "Edelbrunn", "Felsental", "Rosenwold", "Sonnrain", "Talriva", "Weissental"] },
-  { country: "Turkey", league: "Anatolian League", cities: ["Akverin", "Altunova", "Beyvadi", "Gokyaren", "Karaveli", "Mavikara", "Yenikora", "Yildiren"] },
-  { country: "Greece", league: "Hellenic Super League", cities: ["Asterion", "Delfora", "Kallithera", "Lykovar", "Nerovara", "Palaion", "Thalasson", "Vryssara"] },
-  { country: "Croatia", league: "Adriatic Division", cities: ["Bijelivar", "Dobraluka", "Gornivara", "Jadranovik", "Malivrh", "Novorava", "Ravnopolje", "Starivara"] },
-] as const;
-
-const CLUB_NAMING_STYLES: Record<string, string[]> = {
-  England: ["Athletic", "City", "United", "Rovers", "Town", "Wanderers", "County", "Vale"],
-  Scotland: ["Thistle", "Caledonian", "Rovers", "Athletic", "United", "Hearts", "County", "FC"],
-  Wales: ["Cymru", "Town", "Rovers", "Athletic", "United", "Dragons", "County", "FC"],
-  Ireland: ["Harps", "United", "Rovers", "Athletic", "Town", "Shamrocks", "County", "FC"],
-  France: ["Sporting", "Stade", "Union", "Olympique", "Racing", "Athletic", "FC", "Club"],
-  Spain: ["Deportivo", "Sporting", "Unión", "Atlético", "Racing", "Club", "FC", "Real"],
-  Germany: ["SV", "FC", "VfB", "Union", "Sportverein", "Dynamo", "SC", "TSV"],
-  Italy: ["Calcio", "Sporting", "Unione", "Atletico", "Racing", "FC", "Club", "AC"],
-  Netherlands: ["FC", "VV", "Sporting", "Racing", "United", "SC", "SV", "VVV"],
-  Portugal: ["Sporting", "União", "Atlético", "Clube", "Racing", "FC", "SC", "Desportivo"],
-  Belgium: ["Union", "Sporting", "Racing", "Athletic", "FC", "Stade", "Club", "SC"],
-  Denmark: ["BK", "IF", "Boldklub", "Sporting", "FC", "United", "Racing", "IK"],
-  Norway: ["FK", "IL", "Sporting", "Rovers", "United", "BK", "FC", "SK"],
-  Sweden: ["IF", "BK", "FK", "Sporting", "United", "Racing", "FC", "IK"],
-  Poland: ["KS", "Dynamo", "Sporting", "Union", "FC", "Racing", "Club", "SK"],
-  Austria: ["SV", "Sporting", "Union", "FC", "SC", "Dynamo", "Athletic", "VfB"],
-  Switzerland: ["FC", "Sporting", "Union", "Athletic", "Racing", "SC", "Club", "AC"],
-  Turkey: ["Spor", "Sporting", "FK", "SK", "United", "Athletic", "FC", "Racing"],
-  Greece: ["Athlitikos", "Aster", "Sporting", "AO", "Union", "FC", "Racing", "Podosfairikos"],
-  Croatia: ["NK", "HNK", "Sporting", "Union", "FC", "Racing", "Athletic", "Klub"],
-};
-const ACADEMY_NAMES = ["North Star", "Harbour", "Crown", "Forest", "Coastal", "Foundry", "Valley", "Riverside"];
+const COUNTRIES = WORLD_COUNTRIES.map((entry) => ({ ...entry, league: "", cities: [] as string[] }));
 const FIRST_NAMES = [
   "Ari", "Callum", "Dara", "Elliot", "Finlay", "Hugo", "Isaac", "Jude", "Kian", "Lewis", "Milan", "Noah", "Oscar", "Perry", "Rafi", "Sam", "Tariq", "Vinnie", "Wes", "Zain",
   "Alba", "Bastien", "Cem", "Dario", "Emil", "Faris", "Gael", "Henrik", "Ivo", "Joao", "Kacper", "Luka", "Matteo", "Niko", "Oskar", "Pavel", "Quim", "Ruben", "Soren", "Tomas",
@@ -83,6 +42,20 @@ const LAST_NAMES = [
 ];
 const NATIONALITIES = COUNTRIES.map((entry) => entry.country);
 const POSITIONS: Position[] = ["GK", "DEF", "MID", "FWD"];
+const GLOBAL_CLUBS = [
+  ...ENGLISH_CLUB_SEEDS.map((club) => ({ ...club, country: "England", continent: "Europe" as const, leagueName: "English pyramid" })),
+  ...WORLD_CLUB_SEEDS.map((club) => ({ ...club, leagueName: WORLD_LEAGUES.find((league) => league.id === club.leagueId)?.name ?? club.country })),
+];
+const CITIES_BY_COUNTRY = new Map<string, string[]>();
+const CLUBS_BY_COUNTRY = new Map<string, typeof GLOBAL_CLUBS>();
+for (const club of GLOBAL_CLUBS) {
+  const places = CITIES_BY_COUNTRY.get(club.country) ?? [];
+  if (!places.includes(club.city)) places.push(club.city);
+  CITIES_BY_COUNTRY.set(club.country, places);
+  const countryClubs = CLUBS_BY_COUNTRY.get(club.country) ?? [];
+  countryClubs.push(club);
+  CLUBS_BY_COUNTRY.set(club.country, countryClubs);
+}
 
 function hash(index: number, salt: number) {
   let value = Math.imul(index + 1, 0x45d9f3b) ^ Math.imul(salt + 17, 0x27d4eb2d);
@@ -103,24 +76,17 @@ function groupFor(index: number): WorldPlayerGroup {
 
 function ageFor(index: number, group: WorldPlayerGroup) {
   const ageRoll = hash(index, 3);
-  if (group === "Academy") return 5 + (ageRoll % 13);
+  if (group === "Academy") return 5 + (ageRoll % 16);
   if (group === "Free agent") return 18 + (ageRoll % 20);
   return 18 + (ageRoll % 18);
 }
 
 function clubFor(index: number, group: WorldPlayerGroup) {
-  if (group === "Free agent") return { id: null, name: "Free agent", country: pick(COUNTRIES, index, 19).country };
-  const worldIndex = group === "Academy" ? index - WORLD_FIRST_TEAM_COUNT : index;
-  const clubsPerCountry = group === "Academy" ? 25 : 50;
-  const countryIndex = Math.floor(worldIndex / clubsPerCountry) % COUNTRIES.length;
-  const localIndex = worldIndex % clubsPerCountry;
-  const region = COUNTRIES[countryIndex];
-  const city = region.cities[localIndex % region.cities.length];
-  const ending = CLUB_NAMING_STYLES[region.country][Math.floor(localIndex / region.cities.length) % CLUB_NAMING_STYLES[region.country].length];
-  const name = group === "Academy"
-    ? `${ACADEMY_NAMES[(localIndex + countryIndex) % ACADEMY_NAMES.length]} ${city} Academy`
-    : `${city} ${ending}`;
-  return { id: `world-${group === "Academy" ? "academy" : "club"}-${countryIndex}-${localIndex}`, name, country: region.country };
+  const freeCountry = COUNTRIES[index % COUNTRIES.length];
+  if (group === "Free agent") return { id: null, name: "Free agent", country: freeCountry.country, continent: freeCountry.continent, leagueName: "Free agency" };
+  const rosterIndex = group === "Academy" ? index - WORLD_FIRST_TEAM_COUNT : index;
+  const club = GLOBAL_CLUBS[rosterIndex % GLOBAL_CLUBS.length];
+  return { id: club.short, name: group === "Academy" ? `${club.name} Academy` : club.name, country: club.country, continent: club.continent, leagueName: club.leagueName };
 }
 
 function levelForAge(age: number): SquadLevel {
@@ -137,10 +103,7 @@ function worldPlayer(index: number): WorldPlayerDetail {
   const age = ageFor(index, group);
   const club = clubFor(index, group);
   const nationality = group === "Free agent" ? pick(NATIONALITIES, index, 9) : club.country;
-  const first = pick(FIRST_NAMES, index, 11);
-  const last = pick(LAST_NAMES, index, 23);
-  const middle = index % 4 === 0 ? ` ${pick(["A.", "B.", "C.", "D.", "E."], index, 31)}` : "";
-  const name = `${first}${middle} ${last}`;
+  const name = getWorldPlayerName(index);
   const agePotentialBonus = Math.max(0, Math.min(20, 26 - age));
   const overall = group === "Academy"
     ? Math.max(16, Math.min(60, 12 + age * 2 + (hash(index, 37) % 14)))
@@ -159,6 +122,8 @@ function worldPlayer(index: number): WorldPlayerDetail {
     clubId: club.id,
     clubName: club.name,
     country: club.country,
+    continent: club.continent,
+    leagueName: club.leagueName,
     group,
     overall,
     potential,
@@ -173,9 +138,16 @@ function worldPlayer(index: number): WorldPlayerDetail {
   };
 }
 
+export function getWorldPlayerName(index: number) {
+  const first = FIRST_NAMES[index % FIRST_NAMES.length];
+  const last = LAST_NAMES[Math.floor(index / FIRST_NAMES.length) % LAST_NAMES.length];
+  const middle = String.fromCharCode(65 + Math.floor(index / (FIRST_NAMES.length * LAST_NAMES.length)) % 26);
+  return `${first} ${middle}. ${last}`;
+}
+
 function toListing(player: WorldPlayerDetail): WorldPlayerListing {
-  const { id, name, age, position, nationality, clubId, clubName, country, group } = player;
-  return { id, name, age, position, nationality, clubId, clubName, country, group };
+  const { id, name, age, position, nationality, clubId, clubName, country, continent, leagueName, group } = player;
+  return { id, name, age, position, nationality, clubId, clubName, country, continent, leagueName, group };
 }
 
 export function getWorldPlayerDetails(playerId: string): WorldPlayerDetail | null {
@@ -183,7 +155,7 @@ export function getWorldPlayerDetails(playerId: string): WorldPlayerDetail | nul
   const index = Number(playerId.slice(6)) - 1;
   if (!Number.isInteger(index) || index < 0 || index >= WORLD_PLAYER_COUNT) return null;
   const player = worldPlayer(index);
-  const birthplace = pick(COUNTRIES.find((entry) => entry.country === player.nationality)?.cities ?? COUNTRIES[0].cities, index, 61);
+  const birthplace = pick(CITIES_BY_COUNTRY.get(player.nationality ?? "") ?? CITIES_BY_COUNTRY.get("England") ?? ["Aldervane"], index, 61);
   const month = 1 + hash(index, 63) % 6;
   const day = 1 + hash(index, 67) % 27;
   const rating = (bias: number, salt: number) => Math.max(5, Math.min(99, player.overall + bias + (hash(index, salt) % 19) - 9));
@@ -197,8 +169,7 @@ export function getWorldPlayerDetails(playerId: string): WorldPlayerDetail | nul
   const pathway = ([{ age: 5, squadLevel: "Foundation" }, { age: 9, squadLevel: "Academy" }, { age: 12, squadLevel: "U16" }, { age: 16, squadLevel: "U18" }, { age: 18, squadLevel: "Reserves" }, { age: 21, squadLevel: "First team" }] as { age: number; squadLevel: SquadLevel }[]).filter((stage) => stage.age <= player.age);
   const academyHistory: AcademyRecord[] = pathway.map((stage) => ({ season: Math.max(1, 2026 - player.age + stage.age - 2005), age: stage.age, squadLevel: stage.squadLevel, academyLevel: stage.age <= 11 ? 1 : 2 }));
   const formerClubRegion = pick(COUNTRIES, index, 73);
-  const formerClubSuffixes = CLUB_NAMING_STYLES[formerClubRegion.country];
-  const formerClubName = `${formerClubRegion.cities[index % 8]} ${pick(formerClubSuffixes, index, 79)}`;
+  const formerClubName = CLUBS_BY_COUNTRY.get(formerClubRegion.country)?.[index % 8]?.name ?? "Unattached";
   const records: PlayerClubRecord[] = player.clubId ? [{ clubId: player.clubId, clubName: player.clubName, country: player.country, fromSeason: Math.max(1, 2026 - Math.max(1, player.age - 18) - 2025), toSeason: null, squadLevel: player.squadLevel ?? "First team", ...stats }] : [{ clubId: null, clubName: formerClubName, country: player.country, fromSeason: Math.max(1, 2026 - Math.max(1, player.age - 18) - 2025), toSeason: 2026, squadLevel: "First team", ...stats }];
   return {
     ...player,
