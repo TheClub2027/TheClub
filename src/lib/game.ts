@@ -188,6 +188,8 @@ export type Player = {
   attributeTrainingProgress?: PlayerAttributeMap;
   personality?: PlayerPersonality;
   leadership?: number;
+  internationalCaps?: number;
+  internationalGoals?: number;
 };
 
 const POSITION_ROLE_OPTIONS: Record<Position, TacticalRole[]> = {
@@ -483,6 +485,24 @@ export type Fixture = {
   stats?: MatchStats;
 };
 
+export type InternationalWindowName = "September" | "October" | "November" | "March";
+export type InternationalFixture = {
+  id: string;
+  season: number;
+  window: InternationalWindowName;
+  date: string;
+  confederation: string;
+  competition: "International friendly";
+  homeCountry: string;
+  awayCountry: string;
+  played: boolean;
+  homeGoals: number | null;
+  awayGoals: number | null;
+  homeScorerIds?: string[];
+  awayScorerIds?: string[];
+};
+export type InternationalCallup = { country: string; players: Player[] };
+
 export type FinanceEntry = { date: string; label: string; amount: number };
 export type NewsItem = { id: string; date: string; headline: string; body: string; type: "match" | "club" | "transfer" | "stadium" | "press" | "award"; urgent?: boolean; source?: string; reliability?: number };
 export type ManagerInboxRoute = "overview" | "newsroom" | "tactics" | "fixtures" | "transfers" | "finance" | "academy" | "commercial" | "people" | "stadium";
@@ -589,6 +609,8 @@ export type Career = {
   fixtures: Fixture[];
   activeMatch?: ActiveManagedMatch | null;
   matchArchive?: Fixture[];
+  internationalFixtures?: InternationalFixture[];
+  internationalArchive?: InternationalFixture[];
   matchPreparation?: MatchPreparation;
   setPiecePlan?: SetPiecePlan;
   playerRelationships?: PlayerRelationship[];
@@ -923,6 +945,176 @@ export function generateCareerFixtures(season: number, clubs: Pick<Club, "id" | 
     fixtures.push(...generateFixtures(season, clubIds, leagueId));
   }
   return fixtures;
+}
+
+const INTERNATIONAL_WINDOWS: { name: InternationalWindowName; month: number; yearOffset: number }[] = [
+  { name: "September", month: 8, yearOffset: 0 },
+  { name: "October", month: 9, yearOffset: 0 },
+  { name: "November", month: 10, yearOffset: 0 },
+  { name: "March", month: 2, yearOffset: 1 },
+];
+
+function nthWeekdayDate(year: number, month: number, weekday: number, occurrence: number) {
+  const firstWeekday = new Date(Date.UTC(year, month, 1)).getUTCDay();
+  const day = 1 + ((weekday - firstWeekday + 7) % 7) + (occurrence - 1) * 7;
+  return new Date(Date.UTC(year, month, day)).toISOString().slice(0, 10);
+}
+
+export function generateInternationalFixtures(season: number): InternationalFixture[] {
+  const firstYear = 2026 + season - 1;
+  const continents = [...new Set(WORLD_COUNTRIES.map((entry) => entry.continent))];
+  return INTERNATIONAL_WINDOWS.flatMap((window) => {
+    const date = nthWeekdayDate(firstYear + window.yearOffset, window.month, 3, 2);
+    return continents.flatMap((continent) => {
+      const countries = WORLD_COUNTRIES.filter((entry) => entry.continent === continent).map((entry) => entry.country);
+      const random = randomFrom(stableSeed(`international:${season}:${window.name}:${continent}`));
+      for (let index = countries.length - 1; index > 0; index -= 1) {
+        const swap = Math.floor(random() * (index + 1));
+        [countries[index], countries[swap]] = [countries[swap], countries[index]];
+      }
+      return Array.from({ length: Math.floor(countries.length / 2) }, (_, pairIndex) => {
+        const homeCountry = countries[pairIndex * 2];
+        const awayCountry = countries[pairIndex * 2 + 1];
+        return {
+          id: `s${season}-intl-${window.name.toLowerCase()}-${continent.replaceAll(" ", "-").toLowerCase()}-${pairIndex + 1}`,
+          season,
+          window: window.name,
+          date,
+          confederation: continent,
+          competition: "International friendly" as const,
+          homeCountry,
+          awayCountry,
+          played: false,
+          homeGoals: null,
+          awayGoals: null,
+        };
+      });
+    });
+  });
+}
+
+function internationalPlayerPools(career: Career) {
+  const pools = new Map<string, Player[]>();
+  for (const player of career.players) {
+    if (!player.nationality || player.age < 16 || player.clubId === null || (player.injuryWeeksRemaining ?? 0) > 0) continue;
+    const pool = pools.get(player.nationality) ?? [];
+    pool.push(player);
+    pools.set(player.nationality, pool);
+  }
+  for (const pool of pools.values()) pool.sort((first, second) => second.overall - first.overall || (second.internationalCaps ?? 0) - (first.internationalCaps ?? 0) || first.id.localeCompare(second.id));
+  return pools;
+}
+
+function selectInternationalXI(squad: Player[]) {
+  const remaining = [...squad];
+  const eleven: Player[] = [];
+  const take = (position: Position, count: number) => {
+    for (let index = 0; index < count; index += 1) {
+      const found = remaining.findIndex((player) => player.position === position);
+      if (found < 0) continue;
+      eleven.push(remaining.splice(found, 1)[0]);
+    }
+  };
+  take("GK", 1);
+  take("DEF", 4);
+  take("MID", 3);
+  take("FWD", 3);
+  while (eleven.length < Math.min(11, squad.length)) eleven.push(remaining.shift()!);
+  return eleven;
+}
+
+export function getInternationalCallups(career: Career, date?: string): InternationalCallup[] {
+  const fixtures = career.internationalFixtures ?? [];
+  const targetDate = date ?? fixtures.filter((fixture) => !fixture.played && fixture.date >= getCalendarDate(career)).map((fixture) => fixture.date).sort()[0];
+  if (!targetDate) return [];
+  const pools = internationalPlayerPools(career);
+  const countries = new Set(fixtures.filter((fixture) => fixture.date === targetDate).flatMap((fixture) => [fixture.homeCountry, fixture.awayCountry]));
+  return [...countries].map((country) => {
+    const selected = (pools.get(country) ?? []).slice(0, 23);
+    return { country, players: selected.filter((player) => player.clubId === career.clubId) };
+  }).filter((callup) => callup.players.length > 0).sort((first, second) => first.country.localeCompare(second.country));
+}
+
+function poissonGoals(random: () => number, expected: number) {
+  const threshold = Math.exp(-Math.max(0.1, expected));
+  let product = 1;
+  let count = 0;
+  while (product > threshold && count < 6) {
+    count += 1;
+    product *= Math.max(Number.EPSILON, random());
+  }
+  return Math.max(0, count - 1);
+}
+
+export function simulateInternationalWindow(career: Career, date: string): Career {
+  const next = structuredClone(career);
+  const fixtures = next.internationalFixtures ?? [];
+  const scheduled = fixtures.filter((fixture) => fixture.date === date && !fixture.played);
+  if (!scheduled.length) return career;
+  const clubPlayersByCountry = new Map<string, Set<string>>();
+  const playerPools = internationalPlayerPools(next);
+
+  for (const fixture of scheduled) {
+    const homeSquad = (playerPools.get(fixture.homeCountry) ?? []).slice(0, 23);
+    const awaySquad = (playerPools.get(fixture.awayCountry) ?? []).slice(0, 23);
+    const homeXI = selectInternationalXI(homeSquad);
+    const awayXI = selectInternationalXI(awaySquad);
+    const nationalRating = (country: string, xi: Player[]) => {
+      const fallback = 44 + stableSeed(`national-team:${country}`) % 31;
+      const playerAverage = xi.length ? xi.reduce((sum, player) => sum + player.overall, 0) / xi.length : fallback;
+      return playerAverage * 0.82 + fallback * 0.18;
+    };
+    const homeRating = nationalRating(fixture.homeCountry, homeXI);
+    const awayRating = nationalRating(fixture.awayCountry, awayXI);
+    const random = randomFrom(stableSeed(`${fixture.id}:${date}:result`));
+    const difference = homeRating - awayRating + 2.2;
+    const homeGoals = poissonGoals(random, Math.max(0.25, Math.min(2.7, 1.25 + difference / 34)));
+    const awayGoals = poissonGoals(random, Math.max(0.2, Math.min(2.5, 1.05 - difference / 36)));
+    const homeAppearances = [...homeXI, ...homeSquad.filter((player) => !homeXI.some((starter) => starter.id === player.id)).slice(0, 3)];
+    const awayAppearances = [...awayXI, ...awaySquad.filter((player) => !awayXI.some((starter) => starter.id === player.id)).slice(0, 3)];
+    const recordAppearances = (country: string, players: Player[]) => {
+      const ids = clubPlayersByCountry.get(country) ?? new Set<string>();
+      for (const player of players) {
+        player.internationalCaps = (player.internationalCaps ?? 0) + 1;
+        player.internationalGoals ??= 0;
+        player.condition = Math.max(35, (player.condition ?? 100) - 4);
+        if (player.clubId === next.clubId) ids.add(player.id);
+      }
+      clubPlayersByCountry.set(country, ids);
+    };
+    recordAppearances(fixture.homeCountry, homeAppearances);
+    recordAppearances(fixture.awayCountry, awayAppearances);
+    const scorerIds = (players: Player[], goals: number) => Array.from({ length: goals }, () => {
+      if (!players.length) return undefined;
+      const attackOptions = players.filter((player) => player.position === "FWD" || player.position === "MID");
+      const scorer = (attackOptions.length ? attackOptions : players)[Math.floor(random() * (attackOptions.length || players.length))];
+      scorer.internationalGoals = (scorer.internationalGoals ?? 0) + 1;
+      return scorer.id;
+    }).filter((id): id is string => Boolean(id));
+    fixture.homeGoals = homeGoals;
+    fixture.awayGoals = awayGoals;
+    fixture.homeScorerIds = scorerIds(homeXI, homeGoals);
+    fixture.awayScorerIds = scorerIds(awayXI, awayGoals);
+    fixture.played = true;
+  }
+
+  const calledUpIds = [...clubPlayersByCountry.values()].flatMap((ids) => [...ids]);
+  const calledUpNames = calledUpIds.map((id) => next.players.find((player) => player.id === id)?.name).filter((name): name is string => Boolean(name));
+  const windowName = scheduled[0].window;
+  const homeClub = getClub(next);
+  const resultSummary = scheduled.slice(0, 4).map((fixture) => `${fixture.homeCountry} ${fixture.homeGoals}–${fixture.awayGoals} ${fixture.awayCountry}`).join(" · ");
+  next.news.unshift({
+    id: `international-${next.season}-${windowName.toLowerCase()}`,
+    date: dateLabel(date),
+    headline: calledUpNames.length ? `${calledUpNames.length} ${homeClub.name} players represent their countries` : `${windowName} international window concludes`,
+    body: calledUpNames.length
+      ? `${calledUpNames.slice(0, 5).join(", ")}${calledUpNames.length > 5 ? ` and ${calledUpNames.length - 5} more` : ""} appeared for their national teams. International duty is recorded in each player dossier. ${resultSummary}`
+      : `${scheduled.length} international friendlies were completed across ${new Set(scheduled.flatMap((fixture) => [fixture.homeCountry, fixture.awayCountry])).size} national teams. ${resultSummary}`,
+    type: "match",
+    source: "The International Desk",
+    reliability: 100,
+  });
+  return next;
 }
 
 export function createCareerId(): string {
@@ -1266,7 +1458,7 @@ export function createCareer(manager: string, chosenClubId: string): Career {
   const managerReputation = 48;
   const initialManagerContract = createManagerContract(club, managerReputation, 1);
   const career: Career = {
-    schemaVersion: 21,
+    schemaVersion: 22,
     id,
     manager: manager.trim() || "Alex Morgan",
     clubId: club.id,
@@ -1278,6 +1470,8 @@ export function createCareer(manager: string, chosenClubId: string): Career {
     players,
     playerRelationships,
     fixtures: generateCareerFixtures(1, clubs),
+    internationalFixtures: generateInternationalFixtures(1),
+    internationalArchive: [],
     formation: "4-3-3",
     mentality: "Balanced",
     style: club.dna?.tacticalIdentity ?? "Possession",
@@ -1595,6 +1789,8 @@ export function normalizeCareer(career: Career): Career {
   const openingYear = 2026 + next.season - 1;
   const previousRoundDate = next.fixtures.find((fixture) => fixture.round === next.round - 1)?.date;
   next.calendarDate ??= previousRoundDate ?? `${openingYear}-07-01`;
+  next.internationalArchive ??= [];
+  next.internationalFixtures ??= generateInternationalFixtures(next.season).filter((fixture) => fixture.date > getCalendarDate(next));
   next.managerLeave ??= null;
   next.pressPressure ??= 12;
   next.winlessRun ??= 0;
@@ -1615,7 +1811,7 @@ export function normalizeCareer(career: Career): Career {
     third: modernPattern[next.kitPatterns.third] ?? next.kitPatterns.third,
   };
   next.kitCollectionSeason ??= 0;
-  next.schemaVersion = Math.max(next.schemaVersion ?? 1, 21);
+  next.schemaVersion = Math.max(next.schemaVersion ?? 1, 22);
   next.playerPositions ??= {};
   next.scoutingReports ??= [];
   next.scoutingAssignments ??= [];
@@ -2053,7 +2249,11 @@ export function advanceCareerDays(career: Career, days = 1) {
   return next;
 }
 
-export type DailyAdvanceResult = { career: Career; event: "day" | "matchday" | "scouting" | "inbox" | "unavailable"; advancedDays: number; message: string };
+export type DailyAdvanceResult = { career: Career; event: "day" | "matchday" | "international" | "scouting" | "inbox" | "unavailable"; advancedDays: number; message: string };
+
+function nextInternationalFixtureDate(career: Career, afterDate: string) {
+  return (career.internationalFixtures ?? []).filter((fixture) => !fixture.played && fixture.date > afterDate).map((fixture) => fixture.date).sort()[0];
+}
 
 /** Advances one in-game day. Reaching a fixture date pauses on the tactics screen instead of simulating the match. */
 export function advanceCareerCalendarDay(career: Career): DailyAdvanceResult {
@@ -2069,12 +2269,24 @@ export function advanceCareerCalendarDay(career: Career): DailyAdvanceResult {
   const fixture = scheduled.find((item) => item.homeClubId === career.clubId || item.awayClubId === career.clubId);
   const eventDate = scheduled[0]?.date;
   if (!eventDate) return { career, event: "unavailable", advancedDays: 0, message: "There are no fixtures scheduled for this world week." };
+  const todaysInternationalFixtures = (career.internationalFixtures ?? []).some((item) => !item.played && item.date <= currentDate);
+  if (todaysInternationalFixtures) {
+    const next = simulateInternationalWindow(career, (career.internationalFixtures ?? []).filter((item) => !item.played && item.date <= currentDate).map((item) => item.date).sort()[0]);
+    return { career: next, event: "international", advancedDays: 0, message: "International friendlies have finished. Call-ups, appearances and results are saved in the international centre." };
+  }
   if (fixture && currentDate >= fixture.date) return { career, event: "matchday", advancedDays: 0, message: "It is matchday. Set your team and match plan." };
   if (!fixture && currentDate >= eventDate) {
     const next = playMatchday(career, undefined);
     return { career: next, event: "day", advancedDays: 0, message: "The other leagues have completed their fixtures for this world week." };
   }
   const nextDate = addCalendarDays(currentDate, 1);
+  const nextInternationalDate = nextInternationalFixtureDate(career, currentDate);
+  if (nextInternationalDate && nextInternationalDate <= nextDate && nextInternationalDate <= eventDate) {
+    const next = simulateInternationalWindow({ ...career, calendarDate: nextInternationalDate }, nextInternationalDate);
+    addScoutingCompletionNews(next, currentDate, nextInternationalDate);
+    const days = Math.max(1, Math.round((new Date(`${nextInternationalDate}T12:00:00Z`).getTime() - new Date(`${currentDate}T12:00:00Z`).getTime()) / 86_400_000));
+    return { career: next, event: "international", advancedDays: days, message: "International friendlies have finished. Call-ups, appearances and results are saved in the international centre." };
+  }
   if (!fixture && nextDate >= eventDate) {
     const next = playMatchday({ ...career, calendarDate: eventDate });
     addScoutingCompletionNews(next, currentDate, eventDate);
@@ -2128,7 +2340,7 @@ export function endManagerLeaveEarly(career: Career) {
   return next;
 }
 
-export type CalendarAdvanceResult = { career: Career; advancedDays: number; event: "matchday" | "holiday-return" | "scouting" | "unavailable"; urgentNews: NewsItem[]; message: string };
+export type CalendarAdvanceResult = { career: Career; advancedDays: number; event: "matchday" | "international" | "holiday-return" | "scouting" | "unavailable"; urgentNews: NewsItem[]; message: string };
 
 export function advanceToNextCalendarEvent(career: Career, seed?: number): CalendarAdvanceResult {
   if (career.unemployed) return { career, advancedDays: 0, event: "unavailable", urgentNews: [], message: "Apply for a new club before advancing your career." };
@@ -2139,8 +2351,10 @@ export function advanceToNextCalendarEvent(career: Career, seed?: number): Calen
   const eventDate = scheduledWeek[0]?.date;
   if (!eventDate) return { career, advancedDays: 0, event: "unavailable", urgentNews: [], message: "There are no further fixtures in this calendar week." };
   const currentDate = getCalendarDate(career);
+  const internationalDate = nextInternationalFixtureDate(career, currentDate);
+  const nextMajorDate = internationalDate && internationalDate < eventDate ? internationalDate : eventDate;
   const nextScoutingDate = (career.scoutingReports ?? [])
-    .filter((report) => report.availableDate && report.availableDate > currentDate && report.availableDate < eventDate && (report.managerId === career.id || report.clubId === career.clubId))
+    .filter((report) => report.availableDate && report.availableDate > currentDate && report.availableDate < nextMajorDate && (report.managerId === career.id || report.clubId === career.clubId))
     .map((report) => report.availableDate!)
     .sort()[0];
   if (nextScoutingDate) {
@@ -2150,13 +2364,19 @@ export function advanceToNextCalendarEvent(career: Career, seed?: number): Calen
     const days = Math.max(0, Math.round((new Date(`${nextScoutingDate}T12:00:00Z`).getTime() - new Date(`${currentDate}T12:00:00Z`).getTime()) / 86_400_000));
     return { career: next, advancedDays: days, event: "scouting", urgentNews: [], message: "The five-day scouting assessment is complete. Ratings are now available in the club file." };
   }
-  if (career.managerLeave?.status === "active" && eventDate > career.managerLeave.endDate) {
+  if (career.managerLeave?.status === "active" && nextMajorDate > career.managerLeave.endDate) {
     const next = structuredClone(career);
     const days = Math.max(0, Math.round((new Date(`${career.managerLeave.endDate}T12:00:00Z`).getTime() - new Date(`${currentDate}T12:00:00Z`).getTime()) / 86_400_000));
     next.calendarDate = career.managerLeave.endDate;
     next.managerLeave = { ...career.managerLeave, status: "completed", message: "Your approved leave has ended. You are back in charge." };
     addScoutingCompletionNews(next, currentDate, next.calendarDate);
     return { career: next, advancedDays: days, event: "holiday-return", urgentNews: [], message: next.managerLeave.message };
+  }
+  if (internationalDate && internationalDate < eventDate) {
+    const next = simulateInternationalWindow({ ...career, calendarDate: internationalDate }, internationalDate);
+    addScoutingCompletionNews(next, currentDate, internationalDate);
+    const days = Math.max(0, Math.round((new Date(`${internationalDate}T12:00:00Z`).getTime() - new Date(`${currentDate}T12:00:00Z`).getTime()) / 86_400_000));
+    return { career: next, advancedDays: days, event: "international", urgentNews: [], message: "International friendlies have finished. Call-ups, appearances and results are saved in the international centre." };
   }
   const beforeIds = new Set(career.news.map((item) => item.id));
   const days = Math.max(0, Math.round((new Date(`${eventDate}T12:00:00Z`).getTime() - new Date(`${currentDate}T12:00:00Z`).getTime()) / 86_400_000));
@@ -4331,6 +4551,7 @@ export function beginNextSeason(career: Career): Career {
   applyEnglishPromotionsAndRelegations(next);
   const worldMovement = applyWorldPromotionsAndRelegations(next);
   const retirementRandom = randomFrom(stableSeed(`${next.id}:${next.season + 1}:retirements`));
+  next.internationalArchive = [...(next.internationalArchive ?? []), ...(next.internationalFixtures ?? []).filter((fixture) => fixture.played)].slice(-1_500);
   next.season += 1;
   next.round = 1;
   next.calendarDate = `${2026 + next.season - 1}-07-01`;
@@ -4480,6 +4701,7 @@ export function beginNextSeason(career: Career): Career {
   settleSeasonPromises(next, finishedSeason, finalPosition);
   reviewClubProject(next, finalPosition, finishedSeason);
   next.fixtures = generateCareerFixtures(next.season, next.clubs);
+  next.internationalFixtures = generateInternationalFixtures(next.season);
   next.lineup = createStartingXI(next.players, next.clubId, next.formation);
   next.lastReport = null;
   const newLeague = getCurrentLeague(next);

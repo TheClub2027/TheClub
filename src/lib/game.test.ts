@@ -16,7 +16,9 @@ import {
   createCareerId,
   endManagerLeaveEarly,
   estimateStadiumCommercialIncome,
+  generateInternationalFixtures,
   generateFixtures,
+  getInternationalCallups,
   getAcademyPlayers,
   getScoutingCost,
   getScoutingAssignment,
@@ -2222,6 +2224,50 @@ test("calendar advances one date at a time and pauses for tactics on matchday", 
   assert.equal(ready.event, "matchday");
   assert.equal(ready.advancedDays, 0);
   assert.equal(ready.career.round, round);
+});
+
+test("international windows save worldwide results, player call-ups, caps and goals", () => {
+  const career = createCareer("Jamie Taylor", "WPR");
+  const scheduled = generateInternationalFixtures(career.season);
+  assert.equal(scheduled.length, career.internationalFixtures?.length);
+  assert.equal(new Set(scheduled.map((fixture) => fixture.window)).size, 4);
+  assert.ok(scheduled.length > 300, "the season should include friendlies across the six world confederations");
+  assert.ok(scheduled.every((fixture) => new Date(`${fixture.date}T12:00:00Z`).getUTCDay() === 3), "international windows should take place midweek between club matchdays");
+
+  const firstDate = scheduled[0].date;
+  const clubCountry = getClub(career).country ?? "England";
+  const star = career.players.find((player) => player.clubId === career.clubId && player.age >= 18)!;
+  star.nationality = clubCountry;
+  star.overall = 99;
+  star.position = "FWD";
+  const before = career.internationalFixtures!.filter((fixture) => fixture.date === firstDate);
+  assert.ok(getInternationalCallups(career, firstDate).find((entry) => entry.country === clubCountry)?.players.some((player) => player.id === star.id));
+
+  const nextClubFixture = career.fixtures.filter((fixture) => fixture.homeClubId === career.clubId || fixture.awayClubId === career.clubId)
+    .filter((fixture) => fixture.date > firstDate).sort((first, second) => first.date.localeCompare(second.date))[0]!;
+  career.round = nextClubFixture.round;
+  career.calendarDate = addCalendarDays(firstDate, -1);
+  const progression = advanceCareerCalendarDay(career);
+  assert.equal(progression.event, "international");
+  assert.equal(progression.career.calendarDate, firstDate);
+  assert.equal(progression.career.internationalFixtures?.filter((fixture) => fixture.date === firstDate && fixture.played).length, before.length);
+  const called = progression.career.players.find((player) => player.id === star.id)!;
+  assert.equal(called.internationalCaps, 1);
+  const careerGoalsRecorded = progression.career.internationalFixtures!.reduce((sum, fixture) => sum + [...(fixture.homeScorerIds ?? []), ...(fixture.awayScorerIds ?? [])].filter((id) => id === star.id).length, 0);
+  assert.equal(called.internationalGoals, careerGoalsRecorded);
+  assert.ok((called.condition ?? 100) < 100, "international duty should add saved workload");
+  assert.ok(progression.career.news[0].headline.includes("players represent their countries"));
+
+  for (const fixture of progression.career.fixtures) {
+    fixture.played = true;
+    fixture.homeGoals = 0;
+    fixture.awayGoals = 0;
+  }
+  progression.career.round = getSeasonWeekCount(progression.career) + 1;
+  const nextSeason = beginNextSeason(progression.career);
+  assert.equal(nextSeason.season, 2);
+  assert.equal(nextSeason.internationalArchive?.filter((fixture) => fixture.date === firstDate).length, before.length);
+  assert.ok(nextSeason.internationalFixtures?.every((fixture) => fixture.season === 2), "season rollover should generate a fresh international calendar");
 });
 
 test("pre-match team-talk impact responds to player rapport", () => {

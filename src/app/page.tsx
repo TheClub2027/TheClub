@@ -54,6 +54,7 @@ import {
   MapPin,
   GraduationCap,
   Handshake,
+  Globe,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -90,6 +91,7 @@ import {
   getCalendarDate,
   getFormationSlots,
   getNextFixture,
+  getInternationalCallups,
   advanceToNextCalendarEvent,
   advanceCareerCalendarDay,
   endManagerLeaveEarly,
@@ -143,7 +145,7 @@ import {
   CORNER_DEFENCES,
   FREE_KICK_ROUTINES,
 } from "@/lib/game";
-import type { Career, Club, ClubArchiveLeader, ClubBadge, Fixture, KitPattern, ManagerBriefingRoute, ManagerCareerAppointment, ManagerInboxCategory, ManagerInboxMessage, ManagerPromise, ManagerPromiseKind, MatchEvent, MatchdayManagementPlan, NewsItem, Player, PlayerAttributes, PlayerStats, Position, PressConferenceChoice, SquadLevel, SponsorSlot } from "@/lib/game";
+import type { Career, Club, ClubArchiveLeader, ClubBadge, Fixture, InternationalFixture, KitPattern, ManagerBriefingRoute, ManagerCareerAppointment, ManagerInboxCategory, ManagerInboxMessage, ManagerPromise, ManagerPromiseKind, MatchEvent, MatchdayManagementPlan, NewsItem, Player, PlayerAttributes, PlayerStats, Position, PressConferenceChoice, SquadLevel, SponsorSlot } from "@/lib/game";
 import { ENGLISH_LEAGUES } from "@/lib/league-pyramid";
 import type { LeagueId } from "@/lib/league-pyramid";
 import { WORLD_COUNTRIES, WORLD_LEAGUES } from "@/lib/world-leagues";
@@ -166,7 +168,7 @@ import type { WorldPlayerFilter, WorldPlayerListing } from "@/lib/world-database
 
 const MatchStadiumScene = dynamic(() => import("./stadium-scene"), { ssr: false, loading: () => <div className="stadium-scene-loading">Preparing the matchday ground…</div> });
 
-type View = "overview" | "inbox" | "newsroom" | "archive" | "squad" | "tactics" | "fixtures" | "calendar" | "table" | "transfers" | "people" | "stadium" | "finance" | "clubhouse" | "academy" | "commercial" | "editor" | "manager-career" | "settings";
+type View = "overview" | "inbox" | "newsroom" | "archive" | "squad" | "tactics" | "fixtures" | "international" | "calendar" | "table" | "transfers" | "people" | "stadium" | "finance" | "clubhouse" | "academy" | "commercial" | "editor" | "manager-career" | "settings";
 
 const NAV_ITEMS: { id: View; label: string; icon: LucideIcon; section: string }[] = [
   { id: "overview", label: "Overview", icon: Home, section: "Club" },
@@ -176,6 +178,7 @@ const NAV_ITEMS: { id: View; label: string; icon: LucideIcon; section: string }[
   { id: "squad", label: "Squad", icon: Users, section: "Team" },
   { id: "tactics", label: "Tactics", icon: Activity, section: "Team" },
   { id: "fixtures", label: "Fixtures", icon: CalendarDays, section: "Competition" },
+  { id: "international", label: "International football", icon: Globe, section: "Competition" },
   { id: "calendar", label: "Calendar & leave", icon: CalendarDays, section: "Competition" },
   { id: "table", label: "League table", icon: Trophy, section: "Competition" },
   { id: "transfers", label: "Transfers", icon: RefreshCw, section: "Recruitment" },
@@ -845,6 +848,7 @@ function CareerLayout({ career, setCareer, view, setView, session, syncLabel, se
       setCareer(progression.career);
       setCalendarNotice(progression.message);
       if (progression.event === "matchday") setView("tactics");
+      if (progression.event === "international") setView("international");
       if (progression.event === "inbox") setView("inbox");
       return;
     }
@@ -853,6 +857,7 @@ function CareerLayout({ career, setCareer, view, setView, session, syncLabel, se
     setCareer(result);
     setCalendarNotice(progression.message);
     if (progression.urgentNews.length) setCalendarAlert(progression.urgentNews);
+    if (progression.event === "international" && !onLeave) setView("international");
     if (result.lastReport) setPostMatchReport({ career: result, fixtureId: result.lastReport.fixtureId });
   };
   const playInstantResult = () => {
@@ -906,6 +911,7 @@ function CareerLayout({ career, setCareer, view, setView, session, syncLabel, se
         {view === "archive" && <ClubArchivePage career={career} onPlayerProfile={setProfilePlayerId} />}
         {(view === "squad" || view === "tactics") && <SquadTacticsArea career={career} setCareer={setCareer} onPlayerProfile={setProfilePlayerId} view={view} setView={setView} isMatchday={isMatchday} onInstantResult={playInstantResult} onLiveMatch={() => setMatchdayManagerOpen(true)} />}
         {view === "fixtures" && <Fixtures career={career} setCareer={setCareer} onAdvance={nextAction} seasonEnd={seasonEnd} />}
+        {view === "international" && <InternationalFootball career={career} onPlayerProfile={setProfilePlayerId} />}
         {view === "calendar" && <CareerCalendar career={career} setCareer={setCareer} onAdvance={nextAction} />}
         {view === "table" && <LeagueTable career={career} />}
         {view === "transfers" && <Transfers career={career} setCareer={setCareer} onPlayerProfile={setProfilePlayerId} />}
@@ -1471,7 +1477,7 @@ function PlayerProfile({ player, report, known, onClose }: { player: Player; rep
       <div className="profile-attribute-groups">{[...groups, ...(player.position === "GK" ? [{ title: "Goalkeeping", items: [["handling", "Handling"], ["reactions", "Reflexes"], ["positioning", "Positioning"]] as [keyof PlayerAttributes, string][] }] : [])].map((group) => <section className="profile-attribute-group" key={group.title}><h4>{group.title}</h4>{group.items.map(([key, label]) => <div className="profile-attribute-row" key={key}><span>{label}</span><i><b style={{ width: `${rating(key)}%` }} /></i><strong>{rating(key)}</strong></div>)}</section>)}</div>
       <section className="profile-training-summary"><div className="profile-training-heading"><div><p className="eyebrow">INDIVIDUAL DEVELOPMENT</p><strong>{trainingSummary.focus} programme</strong></div><span>{trainingSummary.progressPercent}%</span></div><div className="profile-training-track" role="progressbar" aria-label="Progress toward the next trained attribute increase" aria-valuemin={0} aria-valuemax={100} aria-valuenow={trainingSummary.progressPercent}><i style={{ width: `${trainingSummary.progressPercent}%` }} /></div><p>{trainingSummary.focusAttributes.length ? `Progress toward a ${trainingSummary.focus.toLowerCase()} attribute increase.` : "Rest programme selected; no attribute training is scheduled."}</p><div className="profile-training-gains">{trainingSummary.improvedAttributes.length ? trainingSummary.improvedAttributes.slice(0, 6).map((attribute) => <span key={attribute.name}>{attribute.name} <b>+{attribute.value}</b></span>) : <span className="profile-training-empty">No permanent attribute gains recorded yet.</span>}</div></section>
     </>}
-    <div className="profile-lower-grid"><section className="profile-data-panel"><div className="profile-section-heading"><div><p className="eyebrow">MATCH RECORD</p><h3>Career statistics</h3></div><span>SEASON {seasonStats.appearances} APPS</span></div><div className="profile-stat-grid">{[["Apps", careerStats.appearances], ["Goals", careerStats.goals], ["Assists", careerStats.assists], ["Clean sheets", careerStats.cleanSheets], ["Minutes", careerStats.minutes.toLocaleString("en-GB")], ["This season", `${seasonStats.goals}G · ${seasonStats.assists}A`]].map(([label, value]) => <div key={String(label)}><strong>{value}</strong><span>{label}</span></div>)}</div><div className="profile-subheading"><strong>Club history</strong><span>{history.length} club{history.length === 1 ? "" : "s"}</span></div>{history.length ? <div className="profile-history-list">{[...history].reverse().map((record, index) => <div className="profile-history-row" key={`${record.clubId}-${record.fromSeason}-${index}`}><i /><div><strong>{record.clubName}</strong><small>{record.country} · {record.squadLevel} · S{record.fromSeason}{record.toSeason ? `–S${record.toSeason}` : "–Present"}</small></div><span>{record.appearances} apps<br />{record.goals} G · {record.assists} A</span></div>)}</div> : <p className="profile-empty-note">No senior club appearances recorded yet.</p>}</section>
+    <div className="profile-lower-grid"><section className="profile-data-panel"><div className="profile-section-heading"><div><p className="eyebrow">MATCH RECORD</p><h3>Career statistics</h3></div><span>SEASON {seasonStats.appearances} APPS</span></div><div className="profile-stat-grid">{[["Apps", careerStats.appearances], ["Goals", careerStats.goals], ["Assists", careerStats.assists], ["Clean sheets", careerStats.cleanSheets], ["Minutes", careerStats.minutes.toLocaleString("en-GB")], ["This season", `${seasonStats.goals}G · ${seasonStats.assists}A`], ["International caps", player.internationalCaps ?? 0], ["International goals", player.internationalGoals ?? 0]].map(([label, value]) => <div key={String(label)}><strong>{value}</strong><span>{label}</span></div>)}</div><div className="profile-subheading"><strong>Club history</strong><span>{history.length} club{history.length === 1 ? "" : "s"}</span></div>{history.length ? <div className="profile-history-list">{[...history].reverse().map((record, index) => <div className="profile-history-row" key={`${record.clubId}-${record.fromSeason}-${index}`}><i /><div><strong>{record.clubName}</strong><small>{record.country} · {record.squadLevel} · S{record.fromSeason}{record.toSeason ? `–S${record.toSeason}` : "–Present"}</small></div><span>{record.appearances} apps<br />{record.goals} G · {record.assists} A</span></div>)}</div> : <p className="profile-empty-note">No senior club appearances recorded yet.</p>}</section>
       <section className="profile-data-panel academy-profile-panel"><div className="profile-section-heading"><div><p className="eyebrow">DEVELOPMENT PATHWAY</p><h3>Academy record</h3></div><GraduationCap size={17} /></div>{academyHistory.length ? <div className="academy-timeline">{academyHistory.map((entry, index) => <div className="academy-timeline-row" key={`${entry.season}-${entry.squadLevel}-${index}`}><span className="academy-timeline-dot">{index + 1}</span><div><strong>{entry.squadLevel}</strong><small>Age {entry.age} · Season {entry.season} · Academy level {entry.academyLevel}</small></div></div>)}</div> : <p className="profile-empty-note">No academy registration recorded.</p>}{player.squadLevel && <div className="profile-current-stage"><span>CURRENT DEVELOPMENT STAGE</span><strong>{player.squadLevel}</strong><small>{player.trainingFocus} programme · {player.managerRapport ?? 58}% manager rapport</small></div>}</section></div>
     <div className="profile-footer"><span>PLAYER VALUE <strong>{known ? MONEY(player.value) : "Scout to assess"}</strong></span><button className="button button-secondary button-small" onClick={onClose}>Close profile</button></div>
   </section></div>;
@@ -1620,6 +1626,66 @@ function Fixtures({ career, setCareer, onAdvance, seasonEnd }: { career: Career;
   })}</div><div className="season-fixture-foot"><span>{open.length ? `${open.length} fixtures scheduled for this matchday` : "All fixtures completed"}</span><span>Open a played result for its timeline and match data.</span></div>{openedMatch && <MatchReportDialog career={career} fixture={openedMatch} onClose={() => setOpenedMatchId(null)} />}</>;
 }
 
+function InternationalFootball({ career, onPlayerProfile }: { career: Career; onPlayerProfile: (playerId: string) => void }) {
+  const currentFixtures = career.internationalFixtures ?? [];
+  const archivedFixtures = career.internationalArchive ?? [];
+  const allFixtures = [...archivedFixtures, ...currentFixtures];
+  const upcomingFixtures = currentFixtures.filter((fixture) => !fixture.played).sort((first, second) => first.date.localeCompare(second.date));
+  const nextDate = upcomingFixtures[0]?.date;
+  const previousDate = allFixtures.filter((fixture) => fixture.played).map((fixture) => fixture.date).sort().at(-1);
+  const focusDate = nextDate ?? previousDate;
+  const focusFixtures = focusDate ? currentFixtures.filter((fixture) => fixture.date === focusDate).sort((first, second) => first.homeCountry.localeCompare(second.homeCountry)) : [];
+  const representedCountries = new Set(career.players.map((player) => player.nationality).filter((country): country is string => Boolean(country)));
+  const spotlightFixtures = focusFixtures.filter((fixture) => representedCountries.has(fixture.homeCountry) || representedCountries.has(fixture.awayCountry));
+  const displayFixtures = (spotlightFixtures.length ? spotlightFixtures : focusFixtures).slice(0, 12);
+  const callups = nextDate ? getInternationalCallups(career, nextDate) : [];
+  const caps = career.players.reduce((sum, player) => sum + (player.internationalCaps ?? 0), 0);
+  const clubCaps = career.players.filter((player) => player.clubId === career.clubId && (player.internationalCaps ?? 0) > 0).sort((first, second) => (second.internationalCaps ?? 0) - (first.internationalCaps ?? 0)).slice(0, 5);
+  const windows = [...new Map(currentFixtures.map((fixture) => [fixture.window, fixture])).values()];
+  const focWindow = focusFixtures[0]?.window;
+  const dateLabel = focusDate ? pageDate(focusDate) : "To be scheduled";
+  const scorerNames = (fixture: InternationalFixture, side: "home" | "away") => (side === "home" ? fixture.homeScorerIds : fixture.awayScorerIds)
+    ?.map((id) => career.players.find((player) => player.id === id)?.name)
+    .filter((name): name is string => Boolean(name)) ?? [];
+
+  return <div className="international-page">
+    <SectionHeading kicker={`THE WORLD GAME · ${2026 + career.season - 1}/${String(2027 + career.season - 1).slice(-2)}`} title="International football" detail="National-team windows, player call-ups and results from across the game's six confederations." action={<span className="international-next-chip"><Globe size={15} /> {nextDate ? `NEXT WINDOW · ${dateLabel}` : "SEASON WINDOWS COMPLETE"}</span>} />
+    <section className="international-hero">
+      <div className="international-hero-copy"><p className="eyebrow">NATIONAL TEAM CENTRE</p><h2>{focWindow ? `${focWindow} internationals` : "A world between matchdays"}</h2><p>{nextDate ? `The next window falls on ${dateLabel}. Career players are selected from their eligible national squads, then results and appearances are recorded as the calendar reaches the date.` : "International activity returns with the next season's calendar."}</p><div className="international-hero-meta"><span><b>{focusFixtures.length}</b> fixtures in this window</span><span><b>{callups.reduce((sum, group) => sum + group.players.length, 0)}</b> of your players in call-up range</span></div></div>
+      <div className="international-orbit" aria-hidden="true"><Globe size={56} strokeWidth={1.1} /><span>WORLD<br />FOOTBALL</span></div>
+    </section>
+    <section className="international-stat-grid" aria-label="International football overview">
+      <article><span>ASSOCIATIONS</span><strong>{WORLD_COUNTRIES.length}</strong><small>Across six confederations</small></article>
+      <article><span>WINDOWS</span><strong>{windows.length}</strong><small>Four dates each season</small></article>
+      <article><span>SEASON FIXTURES</span><strong>{currentFixtures.length}</strong><small>{currentFixtures.filter((fixture) => fixture.played).length} results recorded</small></article>
+      <article><span>CAREER CAPS</span><strong>{caps.toLocaleString("en-GB")}</strong><small>Across players in this save</small></article>
+    </section>
+    <div className="international-window-grid">
+      {windows.map((window) => {
+        const matches = currentFixtures.filter((fixture) => fixture.window === window.window);
+        const date = matches[0]?.date;
+        const completed = matches.length > 0 && matches.every((fixture) => fixture.played);
+        return <article className={`international-window-card ${completed ? "is-complete" : "is-upcoming"}`} key={window.window}><div className="international-window-icon"><CalendarDays size={16} /></div><div><span>{completed ? "WINDOW COMPLETE" : "UPCOMING WINDOW"}</span><strong>{window.window}</strong><small>{date ? pageDate(date) : "Date pending"} · {matches.length} international fixtures</small></div><b>{completed ? "DONE" : "SCHEDULED"}</b></article>;
+      })}
+    </div>
+    <div className="international-content-grid">
+      <section className="panel international-panel">
+        <div className="international-panel-heading"><div><p className="eyebrow">YOUR CLUB · NATIONAL DUTY</p><h2>Call-up watch</h2><span>{nextDate ? `Selection is based on eligible players ahead of ${dateLabel}.` : "Players with recorded international appearances."}</span></div><span className="international-panel-count">{nextDate ? callups.reduce((sum, item) => sum + item.players.length, 0) : clubCaps.length} PLAYERS</span></div>
+        {nextDate && callups.length ? <div className="international-callup-list">{callups.map((group) => <article className="international-callup-group" key={group.country}><div className="international-country-heading"><span>{group.country.slice(0, 3).toUpperCase()}</span><strong>{group.country}<small>{group.players.length} selected from your squad</small></strong><Globe size={14} /></div><div className="international-player-list">{group.players.map((player) => <button className="international-player-row" type="button" key={player.id} onClick={() => onPlayerProfile(player.id)}><span className="international-player-position">{player.position}</span><span className="international-player-copy"><strong>{player.name}</strong><small>Age {player.age} · {player.overall} OVR · {player.internationalCaps ?? 0} caps</small></span><ChevronRight size={14} /></button>)}</div></article>)}</div> : clubCaps.length ? <div className="international-player-list">{clubCaps.map((player) => <button className="international-player-row" type="button" key={player.id} onClick={() => onPlayerProfile(player.id)}><span className="international-player-position">{player.position}</span><span className="international-player-copy"><strong>{player.name}</strong><small>{player.nationality} · {player.internationalCaps} caps · {player.internationalGoals ?? 0} goals</small></span><ChevronRight size={14} /></button>)}</div> : <div className="international-empty"><Users size={19} /><span>No players from your club are in the next senior call-up group yet. Strong form and development can change that.</span></div>}
+      </section>
+      <section className="panel international-panel">
+        <div className="international-panel-heading"><div><p className="eyebrow">{nextDate ? "NEXT INTERNATIONAL DATE" : "LATEST RESULTS"}</p><h2>{nextDate ? "Fixtures around the world" : "International record"}</h2><span>{focusDate ? `${dateLabel} · ${spotlightFixtures.length || focusFixtures.length} nations represented in this view` : "Results will appear when the calendar reaches a window."}</span></div><Flag size={18} /></div>
+        {displayFixtures.length ? <div className="international-results">{displayFixtures.map((fixture) => {
+          const homeScorers = scorerNames(fixture, "home");
+          const awayScorers = scorerNames(fixture, "away");
+          return <article className="international-result-row" key={fixture.id}><div className="international-result-meta"><span>{fixture.confederation}</span><small>{fixture.played ? "FULL TIME" : fixture.competition.toUpperCase()}</small></div><div className="international-scoreline"><strong>{fixture.homeCountry}</strong><b>{fixture.played ? `${fixture.homeGoals} – ${fixture.awayGoals}` : "v"}</b><strong>{fixture.awayCountry}</strong></div><div className="international-scorers">{homeScorers.length || awayScorers.length ? `${homeScorers.join(", ")}${homeScorers.length && awayScorers.length ? " · " : ""}${awayScorers.join(", ")}` : fixture.played ? "No career player recorded as a scorer" : "International friendly · senior teams"}</div></article>;
+        })}</div> : <div className="international-empty"><Globe size={19} /><span>Fixtures will be generated for the next international window.</span></div>}
+      </section>
+    </div>
+    <section className="international-club-record panel"><div><p className="eyebrow">THE CLUB'S INTERNATIONAL RECORD</p><h2>Players have a national career too</h2><p>Caps and goals stay on the player dossier across seasons. International appearances also add a small workload, which is reflected in player condition after the window.</p></div><div className="international-record-leaders">{clubCaps.length ? clubCaps.map((player) => <button type="button" key={player.id} onClick={() => onPlayerProfile(player.id)}><span>{player.name}</span><strong>{player.internationalCaps} <small>CAPS</small></strong><b>{player.internationalGoals ?? 0} <small>GOALS</small></b></button>) : <span className="muted">No senior caps recorded for this club yet.</span>}</div></section>
+  </div>;
+}
+
 function CareerCalendar({ career, setCareer, onAdvance }: { career: Career; setCareer: (career: Career) => void; onAdvance: () => void }) {
   const today = getCalendarDate(career);
   const [selectedDate, setSelectedDate] = useState(today);
@@ -1640,7 +1706,9 @@ function CareerCalendar({ career, setCareer, onAdvance }: { career: Career; setC
   });
   const clubFixtures = career.fixtures.filter((fixture) => fixture.homeClubId === career.clubId || fixture.awayClubId === career.clubId);
   const fixtureDates = new Set(clubFixtures.map((fixture) => fixture.date));
+  const internationalDates = new Set((career.internationalFixtures ?? []).map((fixture) => fixture.date));
   const selectedFixture = clubFixtures.find((fixture) => fixture.date === selectedDate);
+  const selectedInternational = (career.internationalFixtures ?? []).filter((fixture) => fixture.date === selectedDate);
   const selectedOpponent = selectedFixture ? getClub(career, selectedFixture.homeClubId === career.clubId ? selectedFixture.awayClubId : selectedFixture.homeClubId) : null;
   const selectedLongDate = new Date(`${selectedDate}T12:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const monthLabel = new Date(`${visibleMonth}T12:00:00`).toLocaleDateString("en-GB", { month: "long", year: "numeric" });
@@ -1667,14 +1735,15 @@ function CareerCalendar({ career, setCareer, onAdvance }: { career: Career; setC
         <div className="calendar-grid">{calendarDays.map((date) => {
           const inMonth = Number(date.slice(8, 10)) <= monthLength && date.slice(0, 7) === visibleMonth.slice(0, 7);
           const fixture = fixtureDates.has(date);
+          const international = internationalDates.has(date);
           const match = clubFixtures.find((item) => item.date === date);
           const opponent = match ? getClub(career, match.homeClubId === career.clubId ? match.awayClubId : match.homeClubId) : null;
-          return <button type="button" key={date} className={`calendar-day ${inMonth ? "" : "calendar-day-muted"} ${selectedDate === date ? "calendar-day-selected" : ""} ${today === date ? "calendar-day-today" : ""} ${fixture ? "calendar-day-match" : ""}`} onClick={() => setSelectedDate(date)} aria-label={`${new Date(`${date}T12:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}${opponent ? `, ${match?.played ? "match result against" : "match against"} ${opponent.name}` : ""}`} aria-pressed={selectedDate === date}><span>{Number(date.slice(8, 10))}</span>{fixture && <i title={opponent?.name} />}{leaveActive && date >= leave.startDate && date <= leave.endDate && <b title="Manager on approved leave" />}</button>;
+          return <button type="button" key={date} className={`calendar-day ${inMonth ? "" : "calendar-day-muted"} ${selectedDate === date ? "calendar-day-selected" : ""} ${today === date ? "calendar-day-today" : ""} ${fixture ? "calendar-day-match" : ""}`} onClick={() => setSelectedDate(date)} aria-label={`${new Date(`${date}T12:00:00`).toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" })}${opponent ? `, ${match?.played ? "match result against" : "match against"} ${opponent.name}` : ""}${international ? ", international window" : ""}`} aria-pressed={selectedDate === date}><span>{Number(date.slice(8, 10))}</span>{fixture && <i title={opponent?.name} />}{leaveActive && date >= leave.startDate && date <= leave.endDate && <b title="Manager on approved leave" />}{international && <em title="International window" />}</button>;
         })}</div>
-        <div className="calendar-legend"><span><i className="calendar-legend-match" />First-team match</span><span><i className="calendar-legend-leave" />Manager leave</span><span><i className="calendar-legend-today" />Today</span></div>
+        <div className="calendar-legend"><span><i className="calendar-legend-match" />First-team match</span><span><i className="calendar-legend-international" />International window</span><span><i className="calendar-legend-leave" />Manager leave</span><span><i className="calendar-legend-today" />Today</span></div>
       </section>
       <aside className="calendar-side-panel">
-        <section className="panel calendar-day-detail"><p className="eyebrow">SELECTED DATE</p><h2>{selectedLongDate}</h2>{selectedFixture && selectedOpponent ? <div className="calendar-fixture-card"><span>{selectedFixture.played ? "FULL TIME" : selectedFixture.round === career.round ? "UP NEXT" : "SCHEDULED"} · ROUND {selectedFixture.round}</span><strong>{selectedFixture.homeClubId === career.clubId ? getClub(career, career.clubId).shortName : selectedOpponent.shortName}<b>{selectedFixture.played ? `${selectedFixture.homeGoals}–${selectedFixture.awayGoals}` : "v"}</b>{selectedFixture.homeClubId === career.clubId ? selectedOpponent.shortName : getClub(career, career.clubId).shortName}</strong><small>{selectedFixture.homeClubId === career.clubId ? "HOME" : "AWAY"} · {selectedOpponent.name}</small></div> : <div className="calendar-no-event"><CalendarDays size={17} /><span>No first-team fixture is scheduled for this day.</span></div>}</section>
+        <section className="panel calendar-day-detail"><p className="eyebrow">SELECTED DATE</p><h2>{selectedLongDate}</h2>{selectedFixture && selectedOpponent ? <div className="calendar-fixture-card"><span>{selectedFixture.played ? "FULL TIME" : selectedFixture.round === career.round ? "UP NEXT" : "SCHEDULED"} · ROUND {selectedFixture.round}</span><strong>{selectedFixture.homeClubId === career.clubId ? getClub(career, career.clubId).shortName : selectedOpponent.shortName}<b>{selectedFixture.played ? `${selectedFixture.homeGoals}–${selectedFixture.awayGoals}` : "v"}</b>{selectedFixture.homeClubId === career.clubId ? selectedOpponent.shortName : getClub(career, career.clubId).shortName}</strong><small>{selectedFixture.homeClubId === career.clubId ? "HOME" : "AWAY"} · {selectedOpponent.name}</small></div> : selectedInternational.length ? <div className="calendar-fixture-card calendar-international-card"><span>{selectedInternational[0].window.toUpperCase()} INTERNATIONAL WINDOW · {selectedInternational.length} FIXTURES</span><strong>{selectedInternational[0].confederation}<b>{selectedInternational.every((fixture) => fixture.played) ? "RESULTS" : "NATIONS"}</b>National teams</strong><small>International results are recorded as the calendar reaches this date.</small></div> : <div className="calendar-no-event"><CalendarDays size={17} /><span>No first-team fixture is scheduled for this day.</span></div>}</section>
         <section className={`panel manager-leave-card ${leaveActive ? "manager-leave-active" : ""}`}><div className="manager-leave-heading"><div><p className="eyebrow">BOARD APPROVAL · MANAGER’S OFFICE</p><h2>{leaveActive ? "You are on leave" : "Request a holiday"}</h2></div><Shield size={18} /></div>{leaveActive ? <><p>The assistant manager is selecting the team and handling matches. A serious injury, major press crisis or board decision will call you back.</p><div className="leave-date-range"><span>RETURN BY</span><strong>{pageDate(leave.endDate)}</strong><small>{leaveDaysLeft} day{leaveDaysLeft === 1 ? "" : "s"} remaining</small></div><button type="button" className="button button-secondary button-wide" onClick={() => { setCareer(endManagerLeaveEarly(career)); setNotice("You have returned from leave and resumed matchday responsibilities."); }}>Return to the club early</button></> : <><p>The board weighs the club’s results, pressure and confidence before deciding. Your assistant takes over selection while you are away.</p><div className="leave-options">{[3, 7, 14].map((days) => <button type="button" key={days} disabled={career.unemployed || isSeasonComplete(career)} onClick={() => askForLeave(days)}><strong>{days}<small> DAYS</small></strong><span>{days === 3 ? "Short break" : days === 7 ? "One week" : "Two weeks"}</span><ChevronRight size={15} /></button>)}</div>{leave && leave.status !== "active" && <div className={`leave-outcome leave-${leave.status}`}><strong>{leave.status === "interrupted" ? "Leave interrupted" : "Previous leave"}</strong><span>{leave.message}</span></div>}</>}</section>
       </aside>
     </div>
