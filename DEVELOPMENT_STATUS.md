@@ -2,7 +2,7 @@
 
 Audit date: 25 November 2026
 Reference: Master Game Development Specification V2.0
-Current code: local worktree on `codex/stadium-campus-2026-11-24`; manager contract increment committed as `22d88c0`, with the Club Archive increment locally verified but not yet committed or published.
+Current code: `codex/stadium-campus-2026-11-24`; latest local commit `37a72db`, published to GitHub as preview snapshot `0dba184`. Vercel project `the-club` is connected and the preview deployment is READY at https://the-club-5hzsbdbp0-the-club5.vercel.app.
 
 This is a factual implementation checklist. “Implemented” describes code that exists; “tested” describes checks actually run. A static screen or generated record does not count as a complete simulation system.
 
@@ -13,7 +13,7 @@ This is a factual implementation checklist. “Implemented” describes code tha
 - [x] Confirmed the project contains one Supabase career-save migration with row-level security. The local environment has the public Supabase URL and publishable key configured; a live sign-in/save round trip and production environment variables have not been verified in this audit.
 - [x] Ran the existing automated tests, typecheck and production build.
 - [x] Corrected the README's stale claim that the playable league has 12 clubs and 22 matches.
-- [ ] No Vercel preview is verified. Vercel recognizes the The Club account, but API access to team scope `the-club5` still returns 403 after the permission update. GitHub now confirms `push: true` for `TheClub2027/TheClub`; local Git cannot authenticate because its credential helper is unavailable. Current changes have not been published or deployed.
+- [x] Verified the connected Vercel team `the-club5`, project `the-club`, GitHub preview branch and deployment. Vercel built commit `0dba1847bc69fb51e5a1f23b9708e46880459f73` successfully; the preview is READY and returns HTTP 200. The production `main` deployment was not changed.
 
 ## Feature checklist
 
@@ -104,7 +104,7 @@ This is a factual implementation checklist. “Implemented” describes code tha
 - 25 November 2026 manager career file increment: records club appointments, managed W/D/L, league finish, points, titles and promotions; a dismissal ends the appointment and blocks calendar progression until the manager accepts a vacancy. New jobs create a new appointment and restore manager control. Legacy saves migrate from existing club history, and the new Career File page shows appointments, season outcomes and vacancies. Verification: full `pnpm test` — **96 passed, 0 failed**; `pnpm typecheck` passed; isolated production build (`NEXT_DIST_DIR=.next-manager-career-serial`, temporary one-worker setting) passed; `git diff --check` passed; local development route at `http://localhost:3237` returned **HTTP 200**. Browser click-through remains unverified. Vercel team scope still returns 403. GitHub now confirms push permission, but the local Git credential helper is unavailable, so this increment remains local and undeployed.
 
 
-**Club Archive and season records** adds a page for record appearances, goals, assists and clean sheets; club-specific season finishes and full league lines; individual honours; record signings/sales; transfer history; and club milestones. New season records store stable club/league IDs and names plus W-D-L and GF-GA, while older saves are matched by club name. Verification: focused archive and season-record regressions — **2 passed, 0 failed**; `pnpm typecheck` and `git diff --check` passed. The full suite and production build have not yet been rerun for this increment; a previous Windows production build failed during Next.js static generation with `EPERM`. Browser visual acceptance is pending.
+**Club Archive and season records** adds a page for record appearances, goals, assists and clean sheets; club-specific season finishes and full league lines; individual honours; record signings/sales; transfer history; and club milestones. New season records store stable club/league IDs and names plus W-D-L and GF-GA, while older saves are matched by club name. Verification: focused archive and season-record regressions — **2 passed, 0 failed**; `pnpm typecheck` and `git diff --check` passed; the hosted Next.js production build completed and the deployed page returned HTTP 200. A full local test rerun did not produce a confirmed result in this session. Browser visual acceptance is pending.
 
 ## Next implementation increments
 
@@ -112,4 +112,4 @@ This is a factual implementation checklist. “Implemented” describes code tha
 2. **Phase 2 world simulation:** deepen AI contract and wage policy, manager interviews and career paths, player development and inactive-league simulation; profile season rollover performance.
 3. **Phase 3 Match Centre:** refine the 3D movement so it responds to match events and tactics, add stoppage-time choices and replay, and run visual/browser acceptance on the match flow.
 4. **Phase 4–5 depth:** board agendas and project funding, contextual media, international competitions, and remaining stadium/club-operation systems.
-5. **Phase 6 release:** configure the The Club Vercel project and environment variables, verify cloud saves and deployment, then run desktop/tablet/mobile acceptance checks.
+5. **Phase 6 release:** verify cloud saves and run desktop/tablet/mobile acceptance checks against the connected Vercel project and preview.
