@@ -2,7 +2,7 @@
 
 Audit date: 25 November 2026
 Reference: Master Game Development Specification V2.0
-Current code: `codex/stadium-campus-2026-11-24`; latest local commit `37a72db`, published to GitHub as preview snapshot `0dba184`. Vercel project `the-club` is connected and the preview deployment is READY at https://the-club-5hzsbdbp0-the-club5.vercel.app.
+Current code: `codex/stadium-campus-2026-11-24`; the branch is synchronized to the GitHub preview branch. The Vercel `the-club` project builds branch previews, while production `main` remains unchanged.
 
 This is a factual implementation checklist. “Implemented” describes code that exists; “tested” describes checks actually run. A static screen or generated record does not count as a complete simulation system.
 
@@ -13,7 +13,7 @@ This is a factual implementation checklist. “Implemented” describes code tha
 - [x] Confirmed the project contains one Supabase career-save migration with row-level security. The local environment has the public Supabase URL and publishable key configured; a live sign-in/save round trip and production environment variables have not been verified in this audit.
 - [x] Ran the existing automated tests, typecheck and production build.
 - [x] Corrected the README's stale claim that the playable league has 12 clubs and 22 matches.
-- [x] Verified the connected Vercel team `the-club5`, project `the-club`, GitHub preview branch and deployment. Vercel built commit `0dba1847bc69fb51e5a1f23b9708e46880459f73` successfully; the preview is READY and returns HTTP 200. The production `main` deployment was not changed.
+- [x] Verified the connected Vercel team `the-club5`, project `the-club`, GitHub preview branch and deployment flow. A preview built successfully and returned HTTP 200; the production `main` deployment was not changed.
 
 ## Feature checklist
 
@@ -22,7 +22,7 @@ This is a factual implementation checklist. “Implemented” describes code tha
 | Career start and first season | **Implemented · tested** | Manager and club selection, squads, fixtures, results, league tables, transfers, contracts, finances and season progression. Browser QA covered starting a Japan career and saving/reloading locally. |
 | English league pyramid | **Implemented · partial verification** | Seven tiers: 20 clubs in the top division; 24 in the next four; 24 in each regional sixth-tier division. Promotion/relegation logic exists. A multi-season promotion integrity soak test is still needed. |
 | Worldwide leagues | **Implemented · limited structure** | 200 represented countries across six continents, with 199 fictional non-English top flights and second divisions (398 divisions total). Top flights have 10–30 clubs; generated clubs use curated real city and town seeds with country-specific naming forms and local identity qualifiers. Spain's model is 20/22, France 18/18, Germany 18/18, Japan 20/20, Argentina 30/22 and MLS/USL 30/24. Foreign career saves include both divisions, full squads and academy pathways, and their season rollover promotes two and relegates two. Third tiers, country-specific regulations and inactive-world simulation remain future work. |
-| Player database | **Implemented · tested** | 200,000 deterministic generated records: 115,000 first-team, 70,000 academy and 15,000 free agents. IDs and generated names are unique. Global records are generated from code rather than persisted as individual Postgres rows; biographies and history remain synthetic. Each career club receives an 18-player squad and 48 academy prospects aged 5–20. |
+| Player database | **Implemented · tested** | 200,000 deterministic generated records: 115,000 first-team, 70,000 academy and 15,000 free agents. IDs and generated names are unique. Global records are generated from code rather than persisted as individual Postgres rows; biographies and history remain synthetic. Each career club receives an 18-player squad and 48 academy prospects aged 5–20. Career squads use a tier/reputation-aware domestic and regional nationality mix; academy intakes are strongly local while free agents retain global nationalities. |
 | Staff database | **Implemented · tested** | 75,000 generated searchable staff records, including 12 assigned roles for each generated club. Staff do not yet have independent careers, contracts and movement through the world. |
 | Player portraits | **Implemented · tested** | Distinct generated SVG portraits for the 200,000 player IDs. The latest pass adds facial silhouettes, hair and eye variation, and soft portrait lighting. They remain illustrations rather than photorealistic human headshots. |
 | Squads and tactics | **Implemented · partial** | Draggable player positions, in/out-of-possession shapes, formation presets, attribute-aware tactical roles, tactical sliders, a match preparation lab, set-piece assignments and saved dressing-room relationships. Set-piece choices feed the match expected-goals model. Role fluency improves with match minutes and role-focused coaching, and incompatible positions cannot be assigned; positional suitability stars, persistent multiple systems, rehearsed runs/blockers and deeper tactical feedback remain. |
@@ -105,6 +105,8 @@ This is a factual implementation checklist. “Implemented” describes code tha
 
 
 **Club Archive and season records** adds a page for record appearances, goals, assists and clean sheets; club-specific season finishes and full league lines; individual honours; record signings/sales; transfer history; and club milestones. New season records store stable club/league IDs and names plus W-D-L and GF-GA, while older saves are matched by club name. Verification: focused archive and season-record regressions — **2 passed, 0 failed**; `pnpm typecheck` and `git diff --check` passed; the hosted Next.js production build completed and the deployed page returned HTTP 200. A full local test rerun did not produce a confirmed result in this session. Browser visual acceptance is pending.
+
+**Country-aware career squads** gives players at clubs a domestic or nearby-country nationality at a rate shaped by league tier and club reputation. Youth players and annual intakes are strongly linked to their academy's country; unattached free agents still draw from the international pool. This corrects a mismatch where most career-roster players received a nationality chosen uniformly from every world country. Verification: the Japan career regression checks an 18-player domestic/international mix, locally rooted academy players, and country IDs from the world database; focused test, typecheck and diff check passed. Full national teams, caps and tournaments remain unimplemented.
 
 ## Next implementation increments
 

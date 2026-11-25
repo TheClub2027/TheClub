@@ -735,6 +735,14 @@ test("a global career starts a full league season with its own academy and staff
   const career = createCareer("Aiko Tanaka", chosen.short);
   const club = getClub(career);
   assert.equal(club.country, "Japan");
+  const clubSeniorPlayers = career.players.filter((player) => player.clubId === club.id && player.id.startsWith(`${club.id}-`) && /^\d{2}$/.test(player.id.slice(club.id.length + 1)));
+  const clubAcademyPlayers = career.players.filter((player) => player.id.startsWith(`academy-${club.id}-`));
+  assert.equal(clubSeniorPlayers.length, 18);
+  assert.ok(clubSeniorPlayers.filter((player) => player.nationality === club.country).length >= 8, "a national club squad should be primarily made up of domestic players");
+  assert.ok(clubSeniorPlayers.some((player) => player.nationality !== club.country), "international signings should still appear in senior squads");
+  assert.equal(clubAcademyPlayers.length, 48);
+  assert.ok(clubAcademyPlayers.filter((player) => player.nationality === club.country).length >= 42, "academy intakes should be strongly rooted in their club's country");
+  assert.ok(career.players.every((player) => WORLD_COUNTRIES.some((entry) => entry.country === player.nationality)), "generated player nationalities should use the same country data as the world database");
   assert.equal(getCurrentLeague(career).id, chosen.leagueId);
   const leagueTeams = career.clubs.filter((entry) => entry.leagueId === chosen.leagueId);
   assert.equal(leagueTeams.length, 20);

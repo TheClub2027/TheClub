@@ -3,7 +3,7 @@ import { BASE_CLUB_STAFF_COUNT, createClubPersonnel, getWorldStaffById, searchWo
 import type { StaffMember, StaffRole } from "./world-staff-database";
 import { ENGLISH_CLUB_SEEDS, ENGLISH_LEAGUES, leagueDefinition } from "./league-pyramid";
 import type { LeagueId } from "./league-pyramid";
-import { WORLD_CLUB_SEEDS, WORLD_LEAGUES } from "./world-leagues";
+import { WORLD_CLUB_SEEDS, WORLD_COUNTRIES, WORLD_LEAGUES } from "./world-leagues";
 import { defaultExecutiveBoxes, defaultStandDesigns, defaultStandFacades, defaultStandFrontages, defaultStandNames, defaultStandRoofs, defaultStandSeatColors } from "./stadium-designs";
 import { formatGameCurrency, readGameSettings } from "./game-settings";
 import type { ExecutiveBoxesBySide, StandDesigns, StandFacades, StandFrontages, StandNames, StandRoofs, StandSeatColors } from "./stadium-designs";
@@ -653,6 +653,7 @@ const STADIUM_IDENTITIES: { name: string; architecture: StadiumArchitecture; roo
 const FIRST_NAMES = ["Ari", "Callum", "Dara", "Elliot", "Finlay", "Hugo", "Isaac", "Jude", "Kian", "Lewis", "Milan", "Noah", "Oscar", "Perry", "Rafi", "Sam", "Tariq", "Vinnie", "Wes", "Zain"];
 const LAST_NAMES = ["Ainsley", "Bennett", "Clarke", "Doyle", "Ellery", "Fletcher", "Grady", "Haines", "Irwin", "Keane", "Lowry", "Marlow", "Noble", "Osei", "Pike", "Quinn", "Rowe", "Shaw", "Turner", "Vale"];
 const NATIONALITIES = WORLD_PLAYER_COUNTRIES;
+const NATIONALITY_CONTINENT = new Map(WORLD_COUNTRIES.map(({ country, continent }) => [country, continent]));
 const NATIONALITY_BIRTHPLACES: Record<string, string[]> = {
   English: ["Sunderland", "Reading", "Stoke-on-Trent", "York", "Northampton", "Blackpool", "Plymouth", "Huddersfield", "Manchester", "Birmingham", "Wickford", "London"], Scottish: ["Inverhaven", "Dunross", "Braemar", "Aberloch"], Welsh: ["Brynford", "Llanmere", "Cwmhaven", "Porthwick"], Irish: ["Ardmore", "Kilross", "Dunloe", "Rathwick"],
   French: ["Clairmont", "Douvray", "Montfleur", "Valeroux"], Spanish: ["Almaraz", "Estrella", "Monteluz", "Puerto Real"], German: ["Altenburg", "Dornheim", "Lindenau", "Waldheim"], Dutch: ["Aarden", "Dijkhaven", "Havenwijk", "Veldrecht"],
@@ -814,7 +815,23 @@ function refreshPlayerProfile(player: Player, season: number) {
   return player;
 }
 
-function createPlayer(id: string, clubId: string, position: Position, base: number, random: () => number, country = "England"): Player {
+function domesticNationalityShare(country: string, tier: number, reputation: number) {
+  const lowerTierShare = country === "England" ? 0.68 : 0.75;
+  const tierAdjustment = Math.min(0.15, Math.max(0, tier - 1) * 0.025);
+  const reputationAdjustment = Math.min(0.1, Math.max(0, reputation - 68) * 0.003);
+  return Math.max(0.58, Math.min(0.9, lowerTierShare + tierAdjustment - reputationAdjustment));
+}
+
+function generatedNationality(country: string | undefined, random: () => number, domesticShare: number) {
+  if (!country) return NATIONALITIES[Math.floor(random() * NATIONALITIES.length)];
+  if (random() < domesticShare) return country;
+  const continent = NATIONALITY_CONTINENT.get(country);
+  const regionalPool = continent ? WORLD_COUNTRIES.filter((entry) => entry.continent === continent && entry.country !== country).map((entry) => entry.country) : [];
+  const foreignPool = regionalPool.length ? regionalPool : NATIONALITIES.filter((nationality) => nationality !== country);
+  return foreignPool[Math.floor(random() * foreignPool.length)] ?? country;
+}
+
+function createPlayer(id: string, clubId: string, position: Position, base: number, random: () => number, country?: string, domesticShare = 0.78): Player {
   const age = 18 + Math.floor(random() * 17);
   const overall = Math.max(34, Math.min(86, base + Math.floor(random() * 12) - 5));
   const potential = Math.min(91, Math.max(overall, overall + Math.floor(random() * Math.max(2, 20 - Math.max(0, age - 20)))));
@@ -840,7 +857,7 @@ function createPlayer(id: string, clubId: string, position: Position, base: numb
     clubId,
     trainingFocus: "Balanced",
     country,
-    nationality: NATIONALITIES[Math.floor(random() * NATIONALITIES.length)],
+    nationality: generatedNationality(country, random, domesticShare),
     squadLevel: squadLevelForAge(age),
     managerRapport: 58,
     role: position === "GK" ? "Goalkeeper" : position === "DEF" ? "Defender" : position === "MID" ? "Midfielder" : "Forward",
@@ -1159,13 +1176,14 @@ export function createCareer(manager: string, chosenClubId: string): Career {
     const wageMultiplier = leagueEconomy(leagueDefinition(club.leagueId).tier).playerWageMultiplier;
     const leagueTier = leagueDefinition(club.leagueId).tier;
     const base = 50 + Math.round((club.reputation - 52) * 0.4) - Math.max(0, leagueTier - 4) * 2.6;
+    const domesticShare = domesticNationalityShare(club.country ?? "England", leagueTier, club.reputation);
     rosterPositions.forEach((position, playerIndex) => {
-      const player = createPlayer(`${club.id}-${String(playerIndex + 1).padStart(2, "0")}`, club.id, position, base, random, club.country ?? "England");
+      const player = createPlayer(`${club.id}-${String(playerIndex + 1).padStart(2, "0")}`, club.id, position, base, random, club.country ?? "England", domesticShare);
       player.wage = Math.round(player.wage * wageMultiplier / 50) * 50;
       players.push(player);
     });
     for (let index = 0; index < 2; index += 1) {
-      const youth = createPlayer(`${club.id}-youth-${index + 1}`, club.id, (["DEF", "MID", "FWD", "GK"] as Position[])[(clubIndex + index) % 4], Math.max(24, base - 17), random, club.country ?? "England");
+      const youth = createPlayer(`${club.id}-youth-${index + 1}`, club.id, (["DEF", "MID", "FWD", "GK"] as Position[])[(clubIndex + index) % 4], Math.max(24, base - 17), random, club.country ?? "England", 0.97);
       youth.age = 15 + index;
       youth.leadership = leadershipForPlayer(youth.id, youth.age, youth.personality);
       youth.overall = Math.max(24, 25 + Math.round(youth.age * 0.9) + Math.floor(random() * 7));
@@ -1190,7 +1208,7 @@ export function createCareer(manager: string, chosenClubId: string): Career {
       for (let intake = 0; intake < 3; intake += 1) {
         const playerIndex = ageIndex * 3 + intake;
         const position = (["GK", "DEF", "MID", "FWD"] as Position[])[(ageIndex + intake) % 4];
-        const youth = createPlayer(`academy-${academyTeam.id}-${playerIndex + 1}`, academyTeam.id, position, 35 + Math.floor(age * 0.65) + Math.floor(academyRandom() * 5), academyRandom, academyTeam.country);
+        const youth = createPlayer(`academy-${academyTeam.id}-${playerIndex + 1}`, academyTeam.id, position, 35 + Math.floor(age * 0.65) + Math.floor(academyRandom() * 5), academyRandom, academyTeam.country, 0.97);
         youth.age = age;
         youth.leadership = leadershipForPlayer(youth.id, youth.age, youth.personality);
         youth.overall = Math.max(18, Math.min(62, Math.round(12 + age * 1.55 + academyRandom() * 7 + academyQuality)));
@@ -1215,10 +1233,11 @@ export function createCareer(manager: string, chosenClubId: string): Career {
   }
   const scoutPoolRandom = randomFrom(77241 + chosenIndex * 103);
   const scoutPoolClub = careerSeeds[chosenIndex]?.short ?? CLUB_SEEDS[0].short;
+  const scoutPoolCountry = careerSeeds[chosenIndex]?.country ?? "England";
   for (let index = 0; index < 14; index += 1) {
     const age = index === 0 ? 5 : 5 + Math.floor(scoutPoolRandom() * 12);
     const position = (["GK", "DEF", "MID", "FWD"] as Position[])[index % 4];
-    const prospect = createPlayer(`scout-${scoutPoolClub}-${index + 1}`, `scout-${scoutPoolClub}`, position, 34 + age * 0.7, scoutPoolRandom);
+    const prospect = createPlayer(`scout-${scoutPoolClub}-${index + 1}`, `scout-${scoutPoolClub}`, position, 34 + age * 0.7, scoutPoolRandom, scoutPoolCountry, 0.94);
     prospect.age = age;
     prospect.leadership = leadershipForPlayer(prospect.id, prospect.age, prospect.personality);
     prospect.overall = Math.max(16, Math.round(15 + age * 1.7 + scoutPoolRandom() * 8));
@@ -3804,7 +3823,7 @@ function makeRegionalEntrant(career: Career, leagueId: "national-north" | "natio
   };
   const positions: Position[] = ["GK", "GK", "DEF", "DEF", "DEF", "DEF", "DEF", "MID", "MID", "MID", "MID", "MID", "FWD", "FWD", "FWD", "FWD", "FWD", "MID"];
   const random = randomFrom(stableSeed(id));
-  const players = positions.map((position, playerIndex) => createPlayer(`${id}-${String(playerIndex + 1).padStart(2, "0")}`, id, position, 30, random));
+  const players = positions.map((position, playerIndex) => createPlayer(`${id}-${String(playerIndex + 1).padStart(2, "0")}`, id, position, 30, random, "England", 0.98));
   return { club, players };
 }
 
@@ -4199,7 +4218,7 @@ function simulateAITransferWindow(career: Career, clubsWithSummerBusiness = new 
     for (let slot = 0; slot < vacancies; slot += 1) {
       const position = (Object.keys(rosterTargets) as Position[]).sort((first, second) => (counts[first] - rosterTargets[first]) - (counts[second] - rosterTargets[second]))[0];
       const playerId = `regen-s${career.season}-${club.id}-${slot + 1}`;
-      const player = createPlayer(playerId, club.id, position, base - 1, random, club.country);
+      const player = createPlayer(playerId, club.id, position, base - 1, random, club.country, domesticNationalityShare(club.country, tier, club.reputation));
       player.age = 18 + Math.floor(random() * 13);
       player.contractYears = 2 + Math.floor(random() * 3);
       player.wage = Math.round(player.wage * economy.playerWageMultiplier / 50) * 50;
@@ -4369,7 +4388,7 @@ export function beginNextSeason(career: Career): Career {
   const positions: Position[] = ["GK", "DEF", "MID", "FWD"];
   const userAcademyQuality = Math.max(-3, Math.min(5, (academy - 2) * 1.5 + (youthClub.stadium.academyCampusLevel ?? 0) * 0.5));
   for (let index = 0; index < youthCount; index += 1) {
-    const youth = createPlayer(`y${next.season}-${index + 1}`, next.clubId, positions[index % positions.length], 43 + academy * 1.5, random);
+    const youth = createPlayer(`y${next.season}-${index + 1}`, next.clubId, positions[index % positions.length], 43 + academy * 1.5, random, youthClub.country, 0.97);
     youth.age = 5 + Math.floor(random() * 13);
     youth.leadership = leadershipForPlayer(youth.id, youth.age, youth.personality);
     youth.overall = Math.max(18, Math.min(62, Math.round(12 + youth.age * 1.55 + random() * 7 + userAcademyQuality)));
@@ -4392,7 +4411,7 @@ export function beginNextSeason(career: Career): Career {
     for (let index = 0; index < intakeCount; index += 1) {
       const age = 5 + Math.floor(intakeRandom() * 13);
       const position = positions[Math.floor(intakeRandom() * positions.length)];
-      const youth = createPlayer(`ai-y${next.season}-${academyClub.id}-${index + 1}`, academyClub.id, position, 34 + age * 0.7 + academyQuality, intakeRandom, academyClub.country);
+      const youth = createPlayer(`ai-y${next.season}-${academyClub.id}-${index + 1}`, academyClub.id, position, 34 + age * 0.7 + academyQuality, intakeRandom, academyClub.country, 0.97);
       youth.age = age;
       youth.leadership = leadershipForPlayer(youth.id, age, youth.personality);
       youth.overall = Math.max(18, Math.min(62, Math.round(12 + age * 1.55 + intakeRandom() * 7 + academyQuality)));
@@ -4410,7 +4429,7 @@ export function beginNextSeason(career: Career): Career {
   if (aiYouthIntakes) next.news.unshift({ id: `world-youth-intake-s${next.season}`, date: "01 Jul", headline: "A new generation enters the academies", body: `${aiYouthIntakes} young players join academy pathways across the active leagues. Youth quality reflects each club's development facilities.`, type: "club" });
   for (let index = 0; index < 6; index += 1) {
     const age = 5 + Math.floor(random() * 12);
-    const prospect = createPlayer(`scout-${next.season}-${index + 1}`, `scout-${next.season}`, positions[(next.season + index) % positions.length], 35 + age * 0.65, random);
+    const prospect = createPlayer(`scout-${next.season}-${index + 1}`, `scout-${next.season}`, positions[(next.season + index) % positions.length], 35 + age * 0.65, random, youthClub.country, 0.94);
     prospect.age = age;
     prospect.leadership = leadershipForPlayer(prospect.id, prospect.age, prospect.personality);
     prospect.overall = Math.max(16, Math.round(15 + age * 1.7 + random() * 8));
