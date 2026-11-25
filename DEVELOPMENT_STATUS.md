@@ -2,7 +2,7 @@
 
 Audit date: 25 November 2026
 Reference: Master Game Development Specification V2.0
-Current code: `codex/international-football-2026-11-25`; the GitHub preview branch is at commit `5b1acd0` (international football source commit `91f170c`). The hosted Vercel preview is READY and production `main` remains unchanged.
+Current code: `codex/international-football-2026-11-25`; current work is published to the GitHub preview branch. Its Vercel preview is READY and production `main` remains unchanged.
 
 This is a factual implementation checklist. “Implemented” describes code that exists; “tested” describes checks actually run. A static screen or generated record does not count as a complete simulation system.
 
@@ -109,6 +109,8 @@ This is a factual implementation checklist. “Implemented” describes code tha
 **Country-aware career squads** gives players at clubs a domestic or nearby-country nationality at a rate shaped by league tier and club reputation. Youth players and annual intakes are strongly linked to their academy's country; unattached free agents still draw from the international pool. This corrects a mismatch where most career-roster players received a nationality chosen uniformly from every world country. Verification: the Japan career regression checks an 18-player domestic/international mix, locally rooted academy players, and country IDs from the world database; focused test, typecheck and diff check passed.
 
 **International football first slice** adds four international friendlies windows each season, with regional pairings for nations across the six world confederations. Eligible players in the career database can be called up, earn caps and goals, and take a small condition hit for international workload. Results and club-player call-ups show in the new International Football centre; the calendar pauses on those dates, player dossiers track national-team statistics, and played results are archived at season rollover. Verification: focused international, daily calendar and holiday regressions — **3 passed, 0 failed**; `pnpm typecheck` and `git diff --check` passed. The full suite stalled without progress and was stopped, so no full-suite pass is claimed. Local production build was blocked by Dropbox `EPERM`; the hosted preview for the current branch reached READY and returned HTTP 200 at `https://the-club-17jzlpbs6-the-club5.vercel.app`. World Cup/continental qualifying, youth internationals, tournament finals and active national-manager selection remain unimplemented.
+
+**International competition increment** schedules three round-robin Nations League dates for every national team across Europe, Asia, Africa, North America, South America and Oceania. The calendar now keeps one national fixture per country per date, March remains a friendly window, and saved scores calculate group points, goal difference and standings in the international centre. Saves advance to schema 23. Verification: international-window, legacy-save and calendar regressions — **3 passed, 0 failed**; `pnpm typecheck` and `git diff --check` passed. The full suite and browser interaction pass have not been run for this increment.
 
 ## Next implementation increments
 

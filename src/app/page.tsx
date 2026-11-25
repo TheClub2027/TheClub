@@ -92,6 +92,7 @@ import {
   getFormationSlots,
   getNextFixture,
   getInternationalCallups,
+  getInternationalTables,
   advanceToNextCalendarEvent,
   advanceCareerCalendarDay,
   endManagerLeaveEarly,
@@ -1627,6 +1628,11 @@ function Fixtures({ career, setCareer, onAdvance, seasonEnd }: { career: Career;
 }
 
 function InternationalFootball({ career, onPlayerProfile }: { career: Career; onPlayerProfile: (playerId: string) => void }) {
+  const clubCountry = getClub(career).country;
+  const defaultConfederation = WORLD_COUNTRIES.find((entry) => entry.country === clubCountry)?.continent ?? "Europe";
+  const confederations = [...new Set(WORLD_COUNTRIES.map((entry) => entry.continent))];
+  const [selectedConfederation, setSelectedConfederation] = useState<string>(defaultConfederation);
+  useEffect(() => setSelectedConfederation(defaultConfederation), [career.id, career.clubId, defaultConfederation]);
   const currentFixtures = career.internationalFixtures ?? [];
   const archivedFixtures = career.internationalArchive ?? [];
   const allFixtures = [...archivedFixtures, ...currentFixtures];
@@ -1642,6 +1648,7 @@ function InternationalFootball({ career, onPlayerProfile }: { career: Career; on
   const caps = career.players.reduce((sum, player) => sum + (player.internationalCaps ?? 0), 0);
   const clubCaps = career.players.filter((player) => player.clubId === career.clubId && (player.internationalCaps ?? 0) > 0).sort((first, second) => (second.internationalCaps ?? 0) - (first.internationalCaps ?? 0)).slice(0, 5);
   const windows = [...new Map(currentFixtures.map((fixture) => [fixture.window, fixture])).values()];
+  const groupTables = getInternationalTables(career).filter((group) => group.confederation === selectedConfederation);
   const focWindow = focusFixtures[0]?.window;
   const dateLabel = focusDate ? pageDate(focusDate) : "To be scheduled";
   const scorerNames = (fixture: InternationalFixture, side: "home" | "away") => (side === "home" ? fixture.homeScorerIds : fixture.awayScorerIds)
@@ -1668,6 +1675,24 @@ function InternationalFootball({ career, onPlayerProfile }: { career: Career; on
         return <article className={`international-window-card ${completed ? "is-complete" : "is-upcoming"}`} key={window.window}><div className="international-window-icon"><CalendarDays size={16} /></div><div><span>{completed ? "WINDOW COMPLETE" : "UPCOMING WINDOW"}</span><strong>{window.window}</strong><small>{date ? pageDate(date) : "Date pending"} · {matches.length} international fixtures</small></div><b>{completed ? "DONE" : "SCHEDULED"}</b></article>;
       })}
     </div>
+    <section className="panel international-tables-panel">
+      <div className="international-panel-heading">
+        <div><p className="eyebrow">CONTINENTAL COMPETITION</p><h2>Confederation Nations League</h2><span>Three group rounds set the table; the March window is reserved for international friendlies.</span></div>
+        <label className="international-confederation-select"><span>CONFEDERATION</span><select value={selectedConfederation} onChange={(event) => setSelectedConfederation(event.target.value)}>{confederations.map((confederation) => <option value={confederation} key={confederation}>{confederation}</option>)}</select></label>
+      </div>
+      <div className="international-group-grid">
+        {groupTables.map((group) => {
+          const fixtures = currentFixtures.filter((fixture) => fixture.competitionGroup === group.group);
+          const played = fixtures.filter((fixture) => fixture.played).length;
+          const label = group.group.split(" · ").at(-1) ?? group.group;
+          return <article className="international-group-card" key={group.group}>
+            <header><div><span>{group.confederation.toUpperCase()}</span><h3>{label}</h3></div><b>{played}/{fixtures.length} PLAYED</b></header>
+            <div className="international-table-scroll"><table><thead><tr><th>#</th><th>Nation</th><th>P</th><th>W-D-L</th><th>GD</th><th>PTS</th></tr></thead><tbody>{group.standings.map((row, index) => <tr key={row.country} className={index === 0 && row.played > 0 ? "is-group-leader" : ""}><td>{String(index + 1).padStart(2, "0")}</td><th scope="row">{row.country}</th><td>{row.played}</td><td>{row.wins}-{row.draws}-{row.losses}</td><td>{row.goalDifference > 0 ? `+${row.goalDifference}` : row.goalDifference}</td><td><strong>{row.points}</strong></td></tr>)}</tbody></table></div>
+          </article>;
+        })}
+      </div>
+      {!groupTables.length && <div className="international-empty"><Globe size={18} /><span>Group tables will appear when the current season’s Nations League fixtures are available.</span></div>}
+    </section>
     <div className="international-content-grid">
       <section className="panel international-panel">
         <div className="international-panel-heading"><div><p className="eyebrow">YOUR CLUB · NATIONAL DUTY</p><h2>Call-up watch</h2><span>{nextDate ? `Selection is based on eligible players ahead of ${dateLabel}.` : "Players with recorded international appearances."}</span></div><span className="international-panel-count">{nextDate ? callups.reduce((sum, item) => sum + item.players.length, 0) : clubCaps.length} PLAYERS</span></div>

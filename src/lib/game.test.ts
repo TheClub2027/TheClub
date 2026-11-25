@@ -19,6 +19,7 @@ import {
   generateInternationalFixtures,
   generateFixtures,
   getInternationalCallups,
+  getInternationalTables,
   getAcademyPlayers,
   getScoutingCost,
   getScoutingAssignment,
@@ -2231,11 +2232,36 @@ test("international windows save worldwide results, player call-ups, caps and go
   const scheduled = generateInternationalFixtures(career.season);
   assert.equal(scheduled.length, career.internationalFixtures?.length);
   assert.equal(new Set(scheduled.map((fixture) => fixture.window)).size, 4);
-  assert.ok(scheduled.length > 300, "the season should include friendlies across the six world confederations");
+  const qualifierFixtures = scheduled.filter((fixture) => fixture.competition === "Confederation Nations League");
+  const friendlyFixtures = scheduled.filter((fixture) => fixture.competition === "International friendly");
+  assert.ok(scheduled.length > 200, "the season should include competitions across the six world confederations");
+  assert.ok(qualifierFixtures.length > 100, "national teams should have continental group fixtures");
+  assert.ok(friendlyFixtures.length > 50, "the March window should retain international friendlies");
   assert.ok(scheduled.every((fixture) => new Date(`${fixture.date}T12:00:00Z`).getUTCDay() === 3), "international windows should take place midweek between club matchdays");
+  assert.ok(qualifierFixtures.every((fixture) => Boolean(fixture.competitionGroup) && (fixture.competitionRound ?? 0) >= 1 && (fixture.competitionRound ?? 0) <= 3));
+  assert.ok(friendlyFixtures.every((fixture) => fixture.window === "March"));
+  assert.deepEqual([...new Set(qualifierFixtures.flatMap((fixture) => [fixture.homeCountry, fixture.awayCountry]))].sort(), WORLD_COUNTRIES.map((entry) => entry.country).sort());
+  for (const date of new Set(scheduled.map((fixture) => fixture.date))) {
+    const appearances = new Map<string, number>();
+    for (const fixture of scheduled.filter((item) => item.date === date)) {
+      appearances.set(fixture.homeCountry, (appearances.get(fixture.homeCountry) ?? 0) + 1);
+      appearances.set(fixture.awayCountry, (appearances.get(fixture.awayCountry) ?? 0) + 1);
+    }
+    assert.ok([...appearances.values()].every((count) => count <= 1), "a nation should never be scheduled twice on the same international date");
+  }
+  const groups = getInternationalTables({ ...career, internationalFixtures: scheduled });
+  assert.ok(groups.length >= 45, "each confederation should be split into Nations League groups");
+  assert.ok(groups.every((group) => group.standings.length >= 3 && group.standings.length <= 4));
+  assert.ok(groups.every((group) => group.standings.every((row) => row.played === 0 && row.points === 0)));
 
-  const firstDate = scheduled[0].date;
   const clubCountry = getClub(career).country ?? "England";
+  const firstDate = scheduled.find((fixture) => fixture.homeCountry === clubCountry || fixture.awayCountry === clubCountry)!.date;
+  for (const fixture of career.internationalFixtures ?? []) {
+    if (fixture.date >= firstDate) continue;
+    fixture.played = true;
+    fixture.homeGoals = 0;
+    fixture.awayGoals = 0;
+  }
   const star = career.players.find((player) => player.clubId === career.clubId && player.age >= 18)!;
   star.nationality = clubCountry;
   star.overall = 99;
@@ -2251,6 +2277,9 @@ test("international windows save worldwide results, player call-ups, caps and go
   assert.equal(progression.event, "international");
   assert.equal(progression.career.calendarDate, firstDate);
   assert.equal(progression.career.internationalFixtures?.filter((fixture) => fixture.date === firstDate && fixture.played).length, before.length);
+  const updatedTables = getInternationalTables(progression.career);
+  assert.ok(updatedTables.some((group) => group.standings.some((row) => row.played > 0)), "completed qualifier rounds should update group tables");
+  assert.ok(updatedTables.flatMap((group) => group.standings).filter((row) => row.played > 0).every((row) => row.points === row.wins * 3 + row.draws && row.played === row.wins + row.draws + row.losses));
   const called = progression.career.players.find((player) => player.id === star.id)!;
   assert.equal(called.internationalCaps, 1);
   const careerGoalsRecorded = progression.career.internationalFixtures!.reduce((sum, fixture) => sum + [...(fixture.homeScorerIds ?? []), ...(fixture.awayScorerIds ?? [])].filter((id) => id === star.id).length, 0);
@@ -2268,6 +2297,7 @@ test("international windows save worldwide results, player call-ups, caps and go
   assert.equal(nextSeason.season, 2);
   assert.equal(nextSeason.internationalArchive?.filter((fixture) => fixture.date === firstDate).length, before.length);
   assert.ok(nextSeason.internationalFixtures?.every((fixture) => fixture.season === 2), "season rollover should generate a fresh international calendar");
+  assert.ok(nextSeason.internationalFixtures?.some((fixture) => fixture.competition === "Confederation Nations League"));
 });
 
 test("pre-match team-talk impact responds to player rapport", () => {

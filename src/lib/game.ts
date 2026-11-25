@@ -486,13 +486,16 @@ export type Fixture = {
 };
 
 export type InternationalWindowName = "September" | "October" | "November" | "March";
+export type InternationalCompetition = "Confederation Nations League" | "International friendly";
 export type InternationalFixture = {
   id: string;
   season: number;
   window: InternationalWindowName;
   date: string;
   confederation: string;
-  competition: "International friendly";
+  competition: InternationalCompetition;
+  competitionGroup?: string;
+  competitionRound?: number;
   homeCountry: string;
   awayCountry: string;
   played: boolean;
@@ -502,6 +505,8 @@ export type InternationalFixture = {
   awayScorerIds?: string[];
 };
 export type InternationalCallup = { country: string; players: Player[] };
+export type InternationalStanding = { country: string; played: number; wins: number; draws: number; losses: number; goalsFor: number; goalsAgainst: number; goalDifference: number; points: number };
+export type InternationalGroupTable = { confederation: string; group: string; standings: InternationalStanding[] };
 
 export type FinanceEntry = { date: string; label: string; amount: number };
 export type NewsItem = { id: string; date: string; headline: string; body: string; type: "match" | "club" | "transfer" | "stadium" | "press" | "award"; urgent?: boolean; source?: string; reliability?: number };
@@ -963,34 +968,127 @@ function nthWeekdayDate(year: number, month: number, weekday: number, occurrence
 export function generateInternationalFixtures(season: number): InternationalFixture[] {
   const firstYear = 2026 + season - 1;
   const continents = [...new Set(WORLD_COUNTRIES.map((entry) => entry.continent))];
-  return INTERNATIONAL_WINDOWS.flatMap((window) => {
-    const date = nthWeekdayDate(firstYear + window.yearOffset, window.month, 3, 2);
-    return continents.flatMap((continent) => {
-      const countries = WORLD_COUNTRIES.filter((entry) => entry.continent === continent).map((entry) => entry.country);
-      const random = randomFrom(stableSeed(`international:${season}:${window.name}:${continent}`));
-      for (let index = countries.length - 1; index > 0; index -= 1) {
-        const swap = Math.floor(random() * (index + 1));
-        [countries[index], countries[swap]] = [countries[swap], countries[index]];
+  const fixtures: InternationalFixture[] = [];
+  const groupWindows = INTERNATIONAL_WINDOWS.slice(0, 3);
+  for (const confederation of continents) {
+    const countries = WORLD_COUNTRIES.filter((entry) => entry.continent === confederation).map((entry) => entry.country);
+    const random = randomFrom(stableSeed(`international-groups:${season}:${confederation}`));
+    for (let index = countries.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(random() * (index + 1));
+      [countries[index], countries[swap]] = [countries[swap], countries[index]];
+    }
+    const groupCount = Math.ceil(countries.length / 4);
+    const groupSize = Math.floor(countries.length / groupCount);
+    const largerGroupCount = countries.length % groupCount;
+    let countryOffset = 0;
+    for (let groupIndex = 0; groupIndex < groupCount; groupIndex += 1) {
+      const size = groupSize + (groupIndex < largerGroupCount ? 1 : 0);
+      const groupCountries = countries.slice(countryOffset, countryOffset + size);
+      countryOffset += size;
+      const group = `${confederation} · Group ${String.fromCharCode(65 + groupIndex)}`;
+      const rotation: (string | null)[] = [...groupCountries];
+      if (rotation.length % 2) rotation.push(null);
+      const roundCount = rotation.length - 1;
+      for (let round = 0; round < roundCount; round += 1) {
+        const window = groupWindows[round];
+        const date = nthWeekdayDate(firstYear + window.yearOffset, window.month, 3, 2);
+        for (let pairIndex = 0; pairIndex < rotation.length / 2; pairIndex += 1) {
+          const first = rotation[pairIndex];
+          const second = rotation[rotation.length - pairIndex - 1];
+          if (!first || !second) continue;
+          const homeCountry = (round + pairIndex) % 2 === 0 ? first : second;
+          const awayCountry = homeCountry === first ? second : first;
+          fixtures.push({
+            id: `s${season}-nations-${confederation.replaceAll(" ", "-").toLowerCase()}-${groupIndex + 1}-r${round + 1}-${pairIndex + 1}`,
+            season,
+            window: window.name,
+            date,
+            confederation,
+            competition: "Confederation Nations League",
+            competitionGroup: group,
+            competitionRound: round + 1,
+            homeCountry,
+            awayCountry,
+            played: false,
+            homeGoals: null,
+            awayGoals: null,
+          });
+        }
+        rotation.splice(1, 0, rotation.pop()!);
       }
-      return Array.from({ length: Math.floor(countries.length / 2) }, (_, pairIndex) => {
-        const homeCountry = countries[pairIndex * 2];
-        const awayCountry = countries[pairIndex * 2 + 1];
-        return {
-          id: `s${season}-intl-${window.name.toLowerCase()}-${continent.replaceAll(" ", "-").toLowerCase()}-${pairIndex + 1}`,
-          season,
-          window: window.name,
-          date,
-          confederation: continent,
-          competition: "International friendly" as const,
-          homeCountry,
-          awayCountry,
-          played: false,
-          homeGoals: null,
-          awayGoals: null,
-        };
+    }
+  }
+
+  const friendlyWindow = INTERNATIONAL_WINDOWS[3];
+  const friendlyDate = nthWeekdayDate(firstYear + friendlyWindow.yearOffset, friendlyWindow.month, 3, 2);
+  for (const confederation of continents) {
+    const countries = WORLD_COUNTRIES.filter((entry) => entry.continent === confederation).map((entry) => entry.country);
+    const random = randomFrom(stableSeed(`international-friendly:${season}:${confederation}`));
+    for (let index = countries.length - 1; index > 0; index -= 1) {
+      const swap = Math.floor(random() * (index + 1));
+      [countries[index], countries[swap]] = [countries[swap], countries[index]];
+    }
+    for (let pairIndex = 0; pairIndex < Math.floor(countries.length / 2); pairIndex += 1) {
+      fixtures.push({
+        id: `s${season}-intl-${friendlyWindow.name.toLowerCase()}-${confederation.replaceAll(" ", "-").toLowerCase()}-${pairIndex + 1}`,
+        season,
+        window: friendlyWindow.name,
+        date: friendlyDate,
+        confederation,
+        competition: "International friendly",
+        homeCountry: countries[pairIndex * 2],
+        awayCountry: countries[pairIndex * 2 + 1],
+        played: false,
+        homeGoals: null,
+        awayGoals: null,
       });
-    });
-  });
+    }
+  }
+  return fixtures;
+}
+
+export function getInternationalTables(career: Career): InternationalGroupTable[] {
+  const groups = new Map<string, { confederation: string; standings: Map<string, InternationalStanding> }>();
+  for (const fixture of career.internationalFixtures ?? []) {
+    if (fixture.competition !== "Confederation Nations League" || !fixture.competitionGroup) continue;
+    let group = groups.get(fixture.competitionGroup);
+    if (!group) {
+      group = { confederation: fixture.confederation, standings: new Map() };
+      groups.set(fixture.competitionGroup, group);
+    }
+    for (const country of [fixture.homeCountry, fixture.awayCountry]) {
+      if (!group.standings.has(country)) group.standings.set(country, { country, played: 0, wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0, goalDifference: 0, points: 0 });
+    }
+    if (!fixture.played || fixture.homeGoals === null || fixture.awayGoals === null) continue;
+    const home = group.standings.get(fixture.homeCountry)!;
+    const away = group.standings.get(fixture.awayCountry)!;
+    home.played += 1;
+    away.played += 1;
+    home.goalsFor += fixture.homeGoals;
+    home.goalsAgainst += fixture.awayGoals;
+    away.goalsFor += fixture.awayGoals;
+    away.goalsAgainst += fixture.homeGoals;
+    if (fixture.homeGoals > fixture.awayGoals) {
+      home.wins += 1;
+      away.losses += 1;
+      home.points += 3;
+    } else if (fixture.homeGoals < fixture.awayGoals) {
+      away.wins += 1;
+      home.losses += 1;
+      away.points += 3;
+    } else {
+      home.draws += 1;
+      away.draws += 1;
+      home.points += 1;
+      away.points += 1;
+    }
+  }
+  return [...groups.entries()].map(([name, group]) => ({
+    confederation: group.confederation,
+    group: name,
+    standings: [...group.standings.values()].map((standing) => ({ ...standing, goalDifference: standing.goalsFor - standing.goalsAgainst }))
+      .sort((first, second) => second.points - first.points || second.goalDifference - first.goalDifference || second.goalsFor - first.goalsFor || first.country.localeCompare(second.country)),
+  })).sort((first, second) => first.confederation.localeCompare(second.confederation) || first.group.localeCompare(second.group));
 }
 
 function internationalPlayerPools(career: Career) {
@@ -1101,15 +1199,17 @@ export function simulateInternationalWindow(career: Career, date: string): Caree
   const calledUpIds = [...clubPlayersByCountry.values()].flatMap((ids) => [...ids]);
   const calledUpNames = calledUpIds.map((id) => next.players.find((player) => player.id === id)?.name).filter((name): name is string => Boolean(name));
   const windowName = scheduled[0].window;
+  const qualifierCount = scheduled.filter((fixture) => fixture.competition === "Confederation Nations League").length;
+  const friendlyCount = scheduled.length - qualifierCount;
   const homeClub = getClub(next);
   const resultSummary = scheduled.slice(0, 4).map((fixture) => `${fixture.homeCountry} ${fixture.homeGoals}–${fixture.awayGoals} ${fixture.awayCountry}`).join(" · ");
   next.news.unshift({
     id: `international-${next.season}-${windowName.toLowerCase()}`,
     date: dateLabel(date),
-    headline: calledUpNames.length ? `${calledUpNames.length} ${homeClub.name} players represent their countries` : `${windowName} international window concludes`,
+    headline: calledUpNames.length ? `${calledUpNames.length} ${homeClub.name} players represent their countries` : qualifierCount ? `${windowName} Nations League round concludes` : `${windowName} international friendlies conclude`,
     body: calledUpNames.length
-      ? `${calledUpNames.slice(0, 5).join(", ")}${calledUpNames.length > 5 ? ` and ${calledUpNames.length - 5} more` : ""} appeared for their national teams. International duty is recorded in each player dossier. ${resultSummary}`
-      : `${scheduled.length} international friendlies were completed across ${new Set(scheduled.flatMap((fixture) => [fixture.homeCountry, fixture.awayCountry])).size} national teams. ${resultSummary}`,
+      ? `${calledUpNames.slice(0, 5).join(", ")}${calledUpNames.length > 5 ? ` and ${calledUpNames.length - 5} more` : ""} appeared for their national teams. International duty is recorded in each player dossier. ${qualifierCount ? `${qualifierCount} Nations League group results update the continental tables.` : `${friendlyCount} international friendlies were played.`} ${resultSummary}`
+      : `${qualifierCount} Confederation Nations League group fixtures and ${friendlyCount} friendlies were completed across ${new Set(scheduled.flatMap((fixture) => [fixture.homeCountry, fixture.awayCountry])).size} national teams. ${resultSummary}`,
     type: "match",
     source: "The International Desk",
     reliability: 100,
@@ -1458,7 +1558,7 @@ export function createCareer(manager: string, chosenClubId: string): Career {
   const managerReputation = 48;
   const initialManagerContract = createManagerContract(club, managerReputation, 1);
   const career: Career = {
-    schemaVersion: 22,
+    schemaVersion: 23,
     id,
     manager: manager.trim() || "Alex Morgan",
     clubId: club.id,
@@ -1811,7 +1911,7 @@ export function normalizeCareer(career: Career): Career {
     third: modernPattern[next.kitPatterns.third] ?? next.kitPatterns.third,
   };
   next.kitCollectionSeason ??= 0;
-  next.schemaVersion = Math.max(next.schemaVersion ?? 1, 22);
+  next.schemaVersion = Math.max(next.schemaVersion ?? 1, 23);
   next.playerPositions ??= {};
   next.scoutingReports ??= [];
   next.scoutingAssignments ??= [];
@@ -2272,7 +2372,7 @@ export function advanceCareerCalendarDay(career: Career): DailyAdvanceResult {
   const todaysInternationalFixtures = (career.internationalFixtures ?? []).some((item) => !item.played && item.date <= currentDate);
   if (todaysInternationalFixtures) {
     const next = simulateInternationalWindow(career, (career.internationalFixtures ?? []).filter((item) => !item.played && item.date <= currentDate).map((item) => item.date).sort()[0]);
-    return { career: next, event: "international", advancedDays: 0, message: "International friendlies have finished. Call-ups, appearances and results are saved in the international centre." };
+    return { career: next, event: "international", advancedDays: 0, message: "International results are recorded. Group tables, call-ups and player appearances are saved in the international centre." };
   }
   if (fixture && currentDate >= fixture.date) return { career, event: "matchday", advancedDays: 0, message: "It is matchday. Set your team and match plan." };
   if (!fixture && currentDate >= eventDate) {
@@ -2285,7 +2385,7 @@ export function advanceCareerCalendarDay(career: Career): DailyAdvanceResult {
     const next = simulateInternationalWindow({ ...career, calendarDate: nextInternationalDate }, nextInternationalDate);
     addScoutingCompletionNews(next, currentDate, nextInternationalDate);
     const days = Math.max(1, Math.round((new Date(`${nextInternationalDate}T12:00:00Z`).getTime() - new Date(`${currentDate}T12:00:00Z`).getTime()) / 86_400_000));
-    return { career: next, event: "international", advancedDays: days, message: "International friendlies have finished. Call-ups, appearances and results are saved in the international centre." };
+    return { career: next, event: "international", advancedDays: days, message: "International results are recorded. Group tables, call-ups and player appearances are saved in the international centre." };
   }
   if (!fixture && nextDate >= eventDate) {
     const next = playMatchday({ ...career, calendarDate: eventDate });
@@ -2376,7 +2476,7 @@ export function advanceToNextCalendarEvent(career: Career, seed?: number): Calen
     const next = simulateInternationalWindow({ ...career, calendarDate: internationalDate }, internationalDate);
     addScoutingCompletionNews(next, currentDate, internationalDate);
     const days = Math.max(0, Math.round((new Date(`${internationalDate}T12:00:00Z`).getTime() - new Date(`${currentDate}T12:00:00Z`).getTime()) / 86_400_000));
-    return { career: next, advancedDays: days, event: "international", urgentNews: [], message: "International friendlies have finished. Call-ups, appearances and results are saved in the international centre." };
+    return { career: next, advancedDays: days, event: "international", urgentNews: [], message: "International results are recorded. Group tables, call-ups and player appearances are saved in the international centre." };
   }
   const beforeIds = new Set(career.news.map((item) => item.id));
   const days = Math.max(0, Math.round((new Date(`${eventDate}T12:00:00Z`).getTime() - new Date(`${currentDate}T12:00:00Z`).getTime()) / 86_400_000));
