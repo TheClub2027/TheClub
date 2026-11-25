@@ -3,18 +3,24 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import type { Club } from "@/lib/game";
-import { getStandDesign } from "@/lib/stadium-designs";
+import type { Club, StadiumSiteSetting } from "@/lib/game";
+import { STAND_STRUCTURES, getStandDesign } from "@/lib/stadium-designs";
 import type { StandSide } from "@/lib/stadium-designs";
+import { campusPlotIsOwned, facilitySiteHasCollision, facilitySizeFactor, getStadiumLandParcel } from "@/lib/stadium-facilities";
+import type { FacilitySiteFootprint, StadiumFacilityKey, StadiumLandSide } from "@/lib/stadium-facilities";
 import type { Draft } from "./stadium-architect";
+import { addStadiumContext } from "./stadium-context";
 
-type Props = { club: Club; draft: Draft; selectedStand: StandSide | null; onSelectStand: (side: StandSide) => void };
-type ViewPreset = "Aerial" | "Broadcast" | "Pitch";
+export type MatchSceneMarker = { id: string; x: number; z: number; color: string; number: number };
+type Props = { club: Club; draft: Draft; selectedStand: StandSide | null; onSelectStand: (side: StandSide) => void; placementFacility: StadiumFacilityKey | null; onPlaceFacility: (key: StadiumFacilityKey, position: { x: number; z: number }) => void; mode?: "facilities" | "match"; matchMinute?: number; matchPlayers?: MatchSceneMarker[] };
+type ViewPreset = "Aerial" | "Campus" | "Broadcast" | "Pitch" | "Matchday";
 
 const CAMERA: Record<ViewPreset, [number, number, number]> = {
   Aerial: [205, 285, 205],
+  Campus: [325, 410, 325],
   Broadcast: [190, 135, 190],
   Pitch: [140, 65, 140],
+  Matchday: [113, 92, 122],
 };
 
 function buildPitchTexture(draft: Draft) {
@@ -87,6 +93,48 @@ function buildPitchTexture(draft: Draft) {
   return texture;
 }
 
+function buildStadiumSkyTexture() {
+  const canvas = document.createElement("canvas");
+  canvas.width = 2048;
+  canvas.height = 1024;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  const sky = context.createLinearGradient(0, 0, 0, canvas.height);
+  sky.addColorStop(0, "#587e91");
+  sky.addColorStop(0.37, "#91b2ba");
+  sky.addColorStop(0.55, "#ccd8d4");
+  sky.addColorStop(0.72, "#e0dbca");
+  sky.addColorStop(1, "#b8c2ba");
+  context.fillStyle = sky;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Broad, low-opacity cloud bands keep the 360° background soft and natural
+  // without distracting from stand-selection highlights and build previews.
+  let seed = 612_047;
+  const random = () => { seed = (seed * 48_271) % 2_147_483_647; return seed / 2_147_483_647; };
+  context.save();
+  context.filter = "blur(18px)";
+  for (let cloud = 0; cloud < 34; cloud += 1) {
+    const x = random() * canvas.width;
+    const y = 95 + random() * 385;
+    const width = 75 + random() * 230;
+    const height = 9 + random() * 31;
+    const alpha = 0.035 + random() * 0.075;
+    context.fillStyle = `rgba(247,248,235,${alpha})`;
+    context.beginPath();
+    context.ellipse(x, y, width, height, (random() - 0.5) * 0.12, 0, Math.PI * 2);
+    context.fill();
+    context.beginPath();
+    context.ellipse(x - width * 0.38, y + height * 0.26, width * 0.35, height * 0.72, 0, 0, Math.PI * 2);
+    context.fill();
+  }
+  context.restore();
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.mapping = THREE.EquirectangularReflectionMapping;
+  return texture;
+}
+
 function buildParkingTexture(surface: "gravel" | "asphalt") {
   const canvas = document.createElement("canvas");
   canvas.width = 512;
@@ -118,6 +166,64 @@ function buildParkingTexture(surface: "gravel" | "asphalt") {
   return texture;
 }
 
+function buildStandFacadeMaterial(facade: string, color: string) {
+  const canvas = document.createElement("canvas");
+  canvas.width = 768;
+  canvas.height = 384;
+  const context = canvas.getContext("2d");
+  if (!context) return new THREE.MeshStandardMaterial({ color, roughness: .84 });
+  context.fillStyle = color;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  if (facade === "Brick & stone") {
+    const mortar = "#c7b5a0";
+    context.fillStyle = mortar;
+    for (let row = 0; row <= 12; row += 1) {
+      const y = row * 32;
+      context.fillRect(0, y, canvas.width, 3);
+      const offset = row % 2 ? 28 : 0;
+      for (let column = -1; column <= 14; column += 1) context.fillRect(column * 56 + offset, y, 3, 32);
+    }
+    context.fillStyle = "#ffffff12";
+    for (let row = 0; row < 12; row += 1) for (let column = 0; column < 13; column += 1) {
+      context.fillRect(column * 56 + (row % 2 ? 28 : 0) + 5, row * 32 + 5, 43, 2);
+    }
+  } else if (facade === "Ribbed metal") {
+    context.fillStyle = "#ffffff13";
+    context.fillRect(0, 0, canvas.width, 5);
+    for (let x = 0; x < canvas.width; x += 24) {
+      context.fillStyle = x % 48 ? "#101a1835" : "#ffffff20";
+      context.fillRect(x, 0, 3, canvas.height);
+      context.fillStyle = "#ffffff0b";
+      context.fillRect(x + 5, 0, 12, canvas.height);
+    }
+    for (let y = 28; y < canvas.height; y += 108) {
+      context.fillStyle = "#17211e66";
+      context.fillRect(0, y, canvas.width, 2);
+    }
+  } else {
+    let seed = 17923;
+    const random = () => { seed = (seed * 48271) % 2147483647; return seed / 2147483647; };
+    for (let patch = 0; patch < 3400; patch += 1) {
+      context.globalAlpha = .018 + random() * .055;
+      context.fillStyle = random() > .48 ? "#ffffff" : "#111a18";
+      const size = 2 + random() * 12;
+      context.fillRect(random() * canvas.width, random() * canvas.height, size, size * (.2 + random() * .8));
+    }
+    context.globalAlpha = 1;
+    context.strokeStyle = "#111a1844";
+    context.lineWidth = 3;
+    for (let x = 0; x <= canvas.width; x += 192) { context.beginPath(); context.moveTo(x, 0); context.lineTo(x, canvas.height); context.stroke(); }
+    for (let y = 0; y <= canvas.height; y += 128) { context.beginPath(); context.moveTo(0, y); context.lineTo(canvas.width, y); context.stroke(); }
+  }
+  const map = new THREE.CanvasTexture(canvas);
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.wrapS = THREE.RepeatWrapping;
+  map.wrapT = THREE.RepeatWrapping;
+  map.repeat.set(5, 2.3);
+  map.anisotropy = 6;
+  return new THREE.MeshStandardMaterial({ map, color: "#ffffff", roughness: facade === "Ribbed metal" ? .63 : .9, metalness: facade === "Ribbed metal" ? .22 : .01 });
+}
+
 function labelTexture(text: string, background: string, foreground = "#eef0d8") {
   const canvas = document.createElement("canvas");
   canvas.width = 1024;
@@ -137,17 +243,27 @@ function labelTexture(text: string, background: string, foreground = "#eef0d8") 
   return texture;
 }
 
-export default function StadiumScene({ club, draft, selectedStand, onSelectStand }: Props) {
+export default function StadiumScene({ club, draft, selectedStand, onSelectStand, placementFacility, onPlaceFacility, mode = "facilities", matchMinute = 0, matchPlayers = [] }: Props) {
   const stageRef = useRef<HTMLDivElement>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const cameraPositionRef = useRef<[number, number, number] | null>(null);
-  const [preset, setPreset] = useState<ViewPreset>("Aerial");
+  const viewLayoutSignature = `${club.id}:${draft.capacity}:${(draft.acquiredLand ?? []).slice().sort().join(",")}`;
+  const cameraLayoutSignatureRef = useRef(viewLayoutSignature);
+  cameraLayoutSignatureRef.current = viewLayoutSignature;
+  const [preset, setPreset] = useState<ViewPreset>(mode === "match" ? "Matchday" : "Aerial");
   const [webglUnavailable, setWebglUnavailable] = useState(false);
+  const [placementNotice, setPlacementNotice] = useState("");
   const selectedStandRef = useRef<StandSide | null>(selectedStand);
   const selectStandRef = useRef(onSelectStand);
+  const placementFacilityRef = useRef<StadiumFacilityKey | null>(placementFacility);
+  const placeFacilityRef = useRef(onPlaceFacility);
+  const matchMinuteRef = useRef(matchMinute);
   const selectionIndicatorsRef = useRef<Partial<Record<StandSide, THREE.Object3D>>>({});
   selectedStandRef.current = selectedStand;
   selectStandRef.current = onSelectStand;
+  placementFacilityRef.current = placementFacility;
+  placeFacilityRef.current = onPlaceFacility;
+  matchMinuteRef.current = matchMinute;
 
   useEffect(() => {
     selectionIndicatorsRef.current = {};
@@ -162,11 +278,15 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
       return;
     }
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color("#c5d8dc");
+    const sceneCameraSignature = viewLayoutSignature;
+    const skyTexture = buildStadiumSkyTexture();
+    scene.background = skyTexture ?? new THREE.Color("#c5d8dc");
     scene.fog = new THREE.Fog("#c5d8dc", 390, 900);
-    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 1200);
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 1800);
+    const acquiredLand = draft.acquiredLand ?? [];
     const initialGroundScale = Math.sqrt(THREE.MathUtils.clamp(draft.capacity / 24_600, 0.42, 1.8));
-    const initialCameraScale = 0.72 + initialGroundScale * 0.28;
+    const campusExpansionScale = mode === "facilities" ? 1 + Math.min(0.75, acquiredLand.length * 0.22) : 1;
+    const initialCameraScale = (mode === "match" ? 0.74 + initialGroundScale * 0.12 : 0.72 + initialGroundScale * 0.28) * campusExpansionScale;
     camera.position.set(...(cameraPositionRef.current ?? CAMERA[preset].map((coordinate) => coordinate * initialCameraScale) as [number, number, number]));
     camera.lookAt(0, 6, 0);
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.6));
@@ -248,10 +368,22 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
     const rowRise = draft.capacity <= 10_000 ? 0.42 : draft.capacity <= 16_000 ? 0.45 : draft.capacity >= 30_000 ? 0.5 : 0.48;
     const tierRun = rows * rowRun + (compactGround ? 2.5 : draft.capacity >= 30_000 ? 4.5 : 3.8);
     const tierRise = rows * rowRise + (compactGround ? 3.1 : draft.capacity <= 16_000 ? 3.8 : draft.capacity >= 30_000 ? 4.8 : 4.2);
-    const siteInnerX = Math.max(76, 59.5 + (Math.max(tiers.east, tiers.west) - 1) * tierRun + rows * rowRun + 8.5);
-    const siteInnerZ = Math.max(57, 41.5 + (Math.max(tiers.north, tiers.south) - 1) * tierRun + rows * rowRun + 8.5);
-    const campusWidth = Math.max(260, (siteInnerX + 70) * 2);
-    const campusDepth = Math.max(220, (siteInnerZ + 63) * 2);
+    const defaultStandRows = rows;
+    const giantRows = compactGround ? 15 : 22;
+    const standExtent = (side: StandSide) => {
+      const profile = getStandDesign(draft.standDesigns[side]).profile;
+      const structure = STAND_STRUCTURES[profile];
+      const sideRows = profile === "giant-end" ? giantRows : Math.max(5, Math.round(rows * structure.rowFactor));
+      const sideTierRun = sideRows * structure.treadDepth + (compactGround ? 2.5 : draft.capacity >= 30_000 ? 4.5 : 3.8);
+      const startRadius = side === "north" || side === "south" ? 41.5 : 59.5;
+      return startRadius + (tiers[side] - 1) * sideTierRun + sideRows * structure.treadDepth + 11;
+    };
+    const siteInnerX = Math.max(76, standExtent("east"), standExtent("west"));
+    const siteInnerZ = Math.max(57, standExtent("north"), standExtent("south"));
+    const expandedWidth = acquiredLand.some((side) => side === "east" || side === "west");
+    const expandedDepth = acquiredLand.some((side) => side === "north" || side === "south");
+    const campusWidth = Math.max(440, (siteInnerX + (expandedWidth ? 245 : 190)) * 2);
+    const campusDepth = Math.max(380, (siteInnerZ + (expandedDepth ? 245 : 165)) * 2);
     const hardscapeWidth = (siteInnerX + 31) * 2;
     const hardscapeDepth = (siteInnerZ + 31) * 2;
     addPlane(campusWidth, campusDepth, 0, -0.62, 0, "#49644c");
@@ -272,6 +404,41 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
     };
     addOvalRing(siteInnerX, siteInnerZ, siteInnerX + 18, siteInnerZ + 17, "#b1b0a1", -0.18);
     addOvalRing(siteInnerX + 18, siteInnerZ + 17, siteInnerX + 26, siteInnerZ + 24, "#515953", -0.16);
+    const roadLevel = draft.siteRoadLevel ?? 0;
+    if (roadLevel >= 1) {
+      const road = material(roadLevel >= 2 ? "#343b38" : "#aaa99c", 0.96, 0.01);
+      const roadMesh = new THREE.Mesh(new THREE.RingGeometry(0.96, 1, 144), road);
+      roadMesh.scale.set(siteInnerX + 43, siteInnerZ + 40, 1);
+      roadMesh.rotation.x = -Math.PI / 2;
+      roadMesh.position.y = -0.11;
+      roadMesh.receiveShadow = true;
+      scene.add(roadMesh);
+      if (roadLevel >= 2) {
+        const centerLine = material("#d7cfa7", 0.85, 0);
+        const marking = new THREE.Mesh(new THREE.RingGeometry(0.994, 1, 144), centerLine);
+        marking.scale.set(siteInnerX + 43, siteInnerZ + 40, 1);
+        marking.rotation.x = -Math.PI / 2;
+        marking.position.y = -0.06;
+        scene.add(marking);
+        for (const [x, z, horizontal] of [[0, -(siteInnerZ + 41), true], [0, siteInnerZ + 41, true], [-(siteInnerX + 44), 0, false], [siteInnerX + 44, 0, false]] as const) {
+          addBox(horizontal ? 7 : 20, 0.14, horizontal ? 20 : 7, x, -0.02, z, "#343b38", scene, 0.96);
+          addBox(0.18, 0.035, 4.2, x, 0.06, z, "#e0d6aa", scene, 0.85);
+        }
+      }
+      if (roadLevel >= 3) {
+        const treeCount = Math.max(12, Math.floor((siteInnerX + siteInnerZ) / 8));
+        for (let index = 0; index < treeCount; index += 1) {
+          const angle = index / treeCount * Math.PI * 2;
+          const x = Math.cos(angle) * (siteInnerX + 51);
+          const z = Math.sin(angle) * (siteInnerZ + 48);
+          addBox(0.45, 3.1, 0.45, x, 1.45, z, "#705c42", scene, 0.9);
+          const crown = new THREE.Mesh(new THREE.IcosahedronGeometry(1.7, 1), material(index % 2 ? "#496c48" : "#58794c"));
+          crown.position.set(x, 4.1, z);
+          crown.castShadow = true;
+          scene.add(crown);
+        }
+      }
+    }
     const pathEndX = siteInnerX + 12;
     const pathEndZ = siteInnerZ + 12;
     for (const [x, z, horizontal] of [[0, -pathEndZ, true], [0, pathEndZ, true], [-pathEndX, 0, false], [pathEndX, 0, false]] as const) {
@@ -316,15 +483,51 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
       for (const post of posts) post.castShadow = true;
     }
 
+    const movingPlayers: { group: THREE.Group; x: number; z: number; phase: number }[] = [];
+    if (mode === "match") {
+      for (const [index, marker] of matchPlayers.entries()) {
+        const player = new THREE.Group();
+        player.position.set(marker.x, 0.2, marker.z);
+        player.userData.baseX = marker.x;
+        player.userData.baseZ = marker.z;
+        const kit = material(marker.color, 0.48, 0.02);
+        const body = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.66, 1.45, 8), kit);
+        body.position.y = 1.12;
+        body.castShadow = true;
+        player.add(body);
+        const head = new THREE.Mesh(new THREE.SphereGeometry(0.39, 9, 7), material("#c59b76", 0.8, 0));
+        head.position.y = 2.05;
+        head.castShadow = true;
+        player.add(head);
+        for (const side of [-1, 1]) {
+          const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.13, 0.62, 6), material("#e0e3da", 0.82, 0));
+          leg.position.set(side * 0.22, 0.43, 0.02);
+          player.add(leg);
+        }
+        const number = new THREE.Mesh(new THREE.PlaneGeometry(0.47, 0.52), new THREE.MeshBasicMaterial({ map: labelTexture(String(marker.number), "#f0f1e5"), transparent: true, side: THREE.DoubleSide, toneMapped: false }));
+        number.position.set(0, 1.2, -0.52);
+        number.rotation.y = Math.PI;
+        player.add(number);
+        scene.add(player);
+        movingPlayers.push({ group: player, x: marker.x, z: marker.z, phase: index * 1.73 });
+      }
+    }
+    const matchBall = mode === "match" ? new THREE.Mesh(new THREE.SphereGeometry(0.52, 12, 10), new THREE.MeshStandardMaterial({ color: "#f1f0df", roughness: 0.47, metalness: 0.02 })) : null;
+    if (matchBall) {
+      matchBall.position.set(0, 0.7, 0);
+      matchBall.castShadow = true;
+      scene.add(matchBall);
+    }
+
     // The same compact dimensions carry through to the corners and upper decks.
     const terrace = material("#656d65", 0.83, 0.02);
     const chairShape = new THREE.Shape();
     chairShape.moveTo(-0.4, 0); chairShape.lineTo(0.4, 0); chairShape.lineTo(0.4, 0.12); chairShape.lineTo(0.31, 0.17); chairShape.lineTo(0.34, 0.4); chairShape.quadraticCurveTo(0.3, 0.52, 0, 0.52); chairShape.quadraticCurveTo(-0.3, 0.52, -0.34, 0.4); chairShape.lineTo(-0.31, 0.17); chairShape.lineTo(-0.4, 0.12); chairShape.closePath();
     const seatGeometry = new THREE.ExtrudeGeometry(chairShape, { depth: 0.1, bevelEnabled: true, bevelSegments: 1, bevelSize: 0.015, bevelThickness: 0.015 });
     seatGeometry.translate(0, 0, -0.05);
-    const seatMaterial = new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.45, metalness: 0.02 });
-    const clubPrimary = new THREE.Color(club.colors[0]);
-    const seatPalette = [clubPrimary, clubPrimary.clone().lerp(new THREE.Color("#e7eee1"), 0.22), clubPrimary.clone().lerp(new THREE.Color(club.colors[1]), 0.35), clubPrimary.clone().lerp(new THREE.Color("#c8a967"), 0.35)];
+    const seatMaterial = new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.62, metalness: 0.015 });
+    const cornerPrimary = new THREE.Color(club.colors[0]);
+    const cornerSeatPalette = [cornerPrimary, cornerPrimary.clone().lerp(new THREE.Color("#e7eee1"), 0.2), cornerPrimary.clone().lerp(new THREE.Color(club.colors[1]), 0.28), cornerPrimary.clone().lerp(new THREE.Color("#c8a967"), 0.25)];
     const glass = new THREE.MeshPhysicalMaterial({ color: "#8fb6ad", roughness: 0.2, metalness: 0.12, transparent: true, opacity: 0.54, side: THREE.DoubleSide, clearcoat: 0.8, clearcoatRoughness: 0.2 });
     const standPickTargets: THREE.Group[] = [];
     const makeStand = (side: StandSide) => {
@@ -332,22 +535,66 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
       group.userData.standSide = side;
       standPickTargets.push(group);
       const design = getStandDesign(draft.standDesigns[side]);
+      const structure = STAND_STRUCTURES[design.profile];
+      const giantEnd = design.profile === "giant-end";
+      const baseRows = defaultStandRows;
+      const rows = giantEnd ? giantRows : Math.max(5, Math.round(baseRows * structure.rowFactor));
+      const rowRun = structure.treadDepth;
+      const rowRise = structure.riserHeight;
+      const tierRun = rows * rowRun + (compactGround ? 2.5 : draft.capacity >= 30_000 ? 4.5 : 3.8);
+      const tierRise = rows * rowRise + (compactGround ? 3.1 : draft.capacity <= 16_000 ? 3.8 : draft.capacity >= 30_000 ? 4.8 : 4.2);
       const roofType = draft.standRoofs?.[side] ?? draft.roof;
       const longSide = side === "north" || side === "south";
       const sign = side === "north" || side === "west" ? -1 : 1;
       const tierCount = Math.max(1, Math.min(4, tiers[side]));
-      const span = longSide
+      const baseSpan = longSide
         ? compactGround ? 108 : draft.capacity <= 16_000 ? 116 : draft.capacity >= 45_000 ? 140 : draft.capacity >= 30_000 ? 132 : 122
         : compactGround ? 70 : draft.capacity <= 16_000 ? 75 : draft.capacity >= 45_000 ? 88 : draft.capacity >= 30_000 ? 83 : 78;
+      const span = baseSpan * structure.spanFactor;
       const halfSpan = span / 2;
       const startRadius = longSide ? 41.5 : 59.5;
-      const isHeritage = design.profile === "heritage";
-      const shellColor = isHeritage ? "#62675f" : design.profile === "terrace" || design.profile === "standing" ? "#747c70" : "#8b938a";
+      const facadeType = draft.standFacades[side];
+      const glassFacade = facadeType === "Curtain glass";
+      const openFacade = facadeType === "Open terrace";
+      const shellColor = facadeType === "Brick & stone" ? "#755541" : facadeType === "Ribbed metal" ? "#667770" : facadeType === "Curtain glass" ? "#91aaa4" : openFacade ? "#798a78" : "#8b938a";
       const shell = material(shellColor, 0.75, 0.02);
+      const façadeTint = facadeType === "Brick & stone" ? "#71503e" : facadeType === "Ribbed metal" ? "#4f625e" : facadeType === "Curtain glass" ? "#596761" : openFacade ? "#83917c" : "#777e78";
+      // An open terrace still needs a solid seating bowl below its seats. Use a
+      // concrete plinth there instead of leaving the seating deck floating.
+      const facadeMaterial = buildStandFacadeMaterial(openFacade ? "Exposed concrete" : facadeType, façadeTint);
+      const standPrimary = new THREE.Color(draft.standSeatColors[side]);
+      const seatPalette = [standPrimary.clone().lerp(new THREE.Color("#f4f1dc"), 0.2), standPrimary.clone().lerp(new THREE.Color("#f4f1dc"), 0.43), standPrimary.clone().lerp(new THREE.Color(club.colors[1]), 0.45), standPrimary.clone().lerp(new THREE.Color("#d8bd75"), 0.34)];
       const seatMatrices: THREE.Matrix4[] = [];
       const seatColorIndices: number[] = [];
       const dummy = new THREE.Object3D();
       const seatYaw = side === "north" ? 0 : side === "south" ? Math.PI : side === "east" ? -Math.PI / 2 : Math.PI / 2;
+
+      // A solid, tapered concrete substructure closes the space beneath each seating deck.
+      // It follows the rake, so the stand reads as a constructed building from every orbit angle.
+      for (let tier = 0; tier < tierCount; tier += 1) {
+        const underDeck = new THREE.Shape();
+        underDeck.moveTo(0, 0.45);
+        underDeck.lineTo(0, 1.38);
+        for (let row = 0; row < rows; row += 1) {
+          const radial = row * rowRun;
+          const y = 1.5 + tier * tierRise + row * rowRise;
+          underDeck.lineTo(radial + rowRun * 0.72, y + 0.05);
+          underDeck.lineTo(radial + rowRun, y + rowRise + 0.06);
+        }
+        underDeck.lineTo(rows * rowRun, 0.45);
+        underDeck.closePath();
+        const mass = new THREE.Mesh(new THREE.ExtrudeGeometry(underDeck, { depth: span - 2, bevelEnabled: false }), facadeMaterial);
+        if (longSide) {
+          mass.rotation.y = sign < 0 ? Math.PI / 2 : -Math.PI / 2;
+          mass.position.set(sign < 0 ? -(span - 2) / 2 : (span - 2) / 2, 0, sign * (startRadius + tier * tierRun));
+        } else {
+          mass.scale.x = sign;
+          mass.position.set(sign * (startRadius + tier * tierRun), 0, -(span - 2) / 2);
+        }
+        mass.castShadow = true;
+        mass.receiveShadow = true;
+        group.add(mass);
+      }
       for (let tier = 0; tier < tierCount; tier += 1) {
         if (tier > 0) {
           const lowerDeckTop = 1.5 + (tier - 1) * tierRise + (rows - 1) * rowRise + 0.42;
@@ -363,9 +610,11 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
           if (longSide) {
             addBox(span, 0.42, rowRun, 0, y, sign * centerRadial, row % 2 ? terrace : shell, group);
             addBox(span, 0.2, 0.16, 0, y - 0.31, sign * (radial + rowRun - 0.08), "#d2d1c3", group, 0.55);
+            if (design.profile === "standing") addBox(span - 2, 0.16, 0.16, 0, y + 0.9, sign * (radial + rowRun - 0.12), "#d8b761", group, 0.38);
           } else {
             addBox(rowRun, 0.42, span, sign * centerRadial, y, 0, row % 2 ? terrace : shell, group);
             addBox(0.16, 0.2, span, sign * (radial + rowRun - 0.08), y - 0.31, 0, "#d2d1c3", group, 0.55);
+            if (design.profile === "standing") addBox(0.16, 0.16, span - 2, sign * (radial + rowRun - 0.12), y + 0.9, 0, "#d8b761", group, 0.38);
           }
           if (draft.seats) {
             const seatSpacing = 0.94;
@@ -374,11 +623,11 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
               const sectionPosition = column % 24;
               if (sectionPosition === 22 || sectionPosition === 23) continue;
               const along = -((columns - 1) * seatSpacing) / 2 + column * seatSpacing;
-              const curved = Math.pow(along / halfSpan, 2) * 1.45;
+              const curved = Math.pow(along / halfSpan, 2) * structure.curve * 9;
               const seatRadial = radial + 0.46 + curved;
               dummy.position.set(longSide ? along : sign * seatRadial, y + 0.18, longSide ? sign * seatRadial : along);
               dummy.rotation.set(0, seatYaw, 0);
-              dummy.scale.set(1, 1, 1);
+              dummy.scale.set(1.12, 1.18, 1);
               dummy.updateMatrix();
               seatMatrices.push(dummy.matrix.clone());
               seatColorIndices.push((Math.floor(column / 24) + tier + (row % 3 === 0 ? 1 : 0)) % seatPalette.length);
@@ -425,21 +674,53 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
       const topY = 1.7 + (tierCount - 1) * tierRise + rows * rowRise;
       const outerRadius = startRadius + (tierCount - 1) * tierRun + rows * rowRun;
       const outerFacadeY = Math.max(3, topY * 0.42);
-      const façadeTint = isHeritage ? "#79563f" : "#596761";
       const facadeRadius = outerRadius + 1.8;
       const facadeHeight = Math.max(7, topY * 0.42);
+      const addMasonryArches = () => {
+        if (facadeType !== "Brick & stone") return;
+        const bayCount = Math.max(4, Math.floor(span / 9));
+        const stone = material("#c29a72", 0.78, 0.02);
+        for (let bay = 0; bay < bayCount; bay += 1) {
+          const along = -span / 2 + (bay + 0.5) * span / bayCount;
+          const arch = new THREE.Mesh(new THREE.TorusGeometry(1.28, 0.15, 7, 20, Math.PI), stone);
+          arch.position.set(longSide ? along : sign * (facadeRadius + 2.42), 3.55, longSide ? sign * (facadeRadius + 2.42) : along);
+          if (!longSide) arch.rotation.y = Math.PI / 2;
+          arch.castShadow = true;
+          group.add(arch);
+          addBox(longSide ? 0.26 : 0.18, 1.25, longSide ? 0.18 : 0.26, longSide ? along - 1.28 : sign * (facadeRadius + 2.42), 2.95, longSide ? sign * (facadeRadius + 2.42) : along - 1.28, stone, group, 0.2);
+          addBox(longSide ? 0.26 : 0.18, 1.25, longSide ? 0.18 : 0.26, longSide ? along + 1.28 : sign * (facadeRadius + 2.42), 2.95, longSide ? sign * (facadeRadius + 2.42) : along + 1.28, stone, group, 0.2);
+        }
+      };
+      addMasonryArches();
       if (longSide) {
-        addBox(span + 4, 2.5, 4, 0, 1.25, sign * facadeRadius, façadeTint, group, 0.58);
+        addBox(span + 4, openFacade ? 1.1 : 2.5, 4, 0, openFacade ? 0.55 : 1.25, sign * facadeRadius, façadeTint, group, 0.58);
         addBox(span + 4, 0.52, 4.4, 0, 2.7, sign * facadeRadius, "#a3aa9b", group, 0.6);
         const windowBandHeight = Math.max(2.2, facadeHeight - 4.2);
-        const glazedBand = new THREE.Mesh(new THREE.BoxGeometry(span - 1.5, windowBandHeight, 0.22), glass);
-        glazedBand.position.set(0, 2.8 + windowBandHeight / 2, sign * (facadeRadius + 2.06));
-        group.add(glazedBand);
-        for (let mullion = -8; mullion <= 8; mullion += 1) addBox(0.32, windowBandHeight + 0.2, 0.34, mullion * (span / 17), 2.8 + windowBandHeight / 2, sign * (facadeRadius + 2.13), "#9ba99f", group, 0.42);
+        if (glassFacade) {
+          const glazedBand = new THREE.Mesh(new THREE.BoxGeometry(span - 1.5, windowBandHeight, 0.22), glass);
+          glazedBand.position.set(0, 2.8 + windowBandHeight / 2, sign * (facadeRadius + 2.06));
+          group.add(glazedBand);
+          for (let mullion = -8; mullion <= 8; mullion += 1) addBox(0.32, windowBandHeight + 0.2, 0.34, mullion * (span / 17), 2.8 + windowBandHeight / 2, sign * (facadeRadius + 2.13), "#9ba99f", group, 0.42);
+        } else if (openFacade) {
+          const posts = Math.max(8, Math.floor(span / 5));
+          for (let post = 0; post <= posts; post += 1) {
+            const x = -span / 2 + post * span / posts;
+            addBox(0.48, windowBandHeight + 0.4, 0.55, x, 2.8 + windowBandHeight / 2, sign * (facadeRadius + 2.2), "#d5d0bc", group, 0.62);
+          }
+          addBox(span, 0.28, 0.42, 0, 2.95, sign * (facadeRadius + 2.32), club.colors[0], group, 0.52);
+        } else {
+          addBox(span - 1.5, windowBandHeight, 0.28, 0, 2.8 + windowBandHeight / 2, sign * (facadeRadius + 2.06), facadeMaterial!, group, facadeType === "Brick & stone" ? 0.93 : 0.68);
+          const ribs = facadeType === "Ribbed metal" ? 20 : facadeType === "Exposed concrete" ? 8 : 12;
+          for (let rib = 0; rib <= ribs; rib += 1) {
+            const x = -span / 2 + rib * (span / ribs);
+            addBox(facadeType === "Ribbed metal" ? 0.27 : 0.46, windowBandHeight + 0.18, 0.42, x, 2.8 + windowBandHeight / 2, sign * (facadeRadius + 2.19), facadeType === "Brick & stone" ? "#98765d" : facadeType === "Ribbed metal" ? "#85928a" : "#999e96", group, 0.75);
+          }
+          for (let window = -3; window <= 3; window += 1) addBox(3.4, 1.15, 0.12, window * (span / 8), 4.4, sign * (facadeRadius + 2.34), "#b8c4ad", group, 0.42);
+        }
         const pierCount = compactGround ? 5 : 8;
         for (let pier = 0; pier <= pierCount; pier += 1) {
           const x = -span / 2 + pier * span / pierCount;
-          addBox(0.78, windowBandHeight + 0.55, 0.62, x, 2.8 + windowBandHeight / 2, sign * (facadeRadius + 2.32), isHeritage ? "#9b7756" : "#74857a", group, 0.56);
+          addBox(0.78, windowBandHeight + 0.55, 0.62, x, 2.8 + windowBandHeight / 2, sign * (facadeRadius + 2.32), facadeType === "Brick & stone" ? "#b38a67" : "#74857a", group, 0.56);
           addBox(1.5, 0.4, 1.25, x, 2.97 + windowBandHeight, sign * (facadeRadius + 2.34), club.colors[1], group, 0.42);
         }
         addBox(span + 4, 0.7, 4.2, 0, facadeHeight + 0.35, sign * facadeRadius, façadeTint, group, 0.58);
@@ -455,17 +736,34 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
           addBox(0.24, 2.75, 0.5, entranceX + 1.7, 1.82, sign * (facadeRadius + 2.52), "#d0c49b", group, 0.55);
         }
       } else {
-        addBox(4, 2.5, span + 4, sign * facadeRadius, 1.25, 0, façadeTint, group, 0.58);
+        addBox(4, openFacade ? 1.1 : 2.5, span + 4, sign * facadeRadius, openFacade ? 0.55 : 1.25, 0, façadeTint, group, 0.58);
         addBox(4.4, 0.52, span + 4, sign * facadeRadius, 2.7, 0, "#a3aa9b", group, 0.6);
         const windowBandHeight = Math.max(2.2, facadeHeight - 4.2);
-        const glazedBand = new THREE.Mesh(new THREE.BoxGeometry(0.22, windowBandHeight, span - 1.5), glass);
-        glazedBand.position.set(sign * (facadeRadius + 2.06), 2.8 + windowBandHeight / 2, 0);
-        group.add(glazedBand);
-        for (let mullion = -5; mullion <= 5; mullion += 1) addBox(0.34, windowBandHeight + 0.2, 0.32, sign * (facadeRadius + 2.13), 2.8 + windowBandHeight / 2, mullion * (span / 11), "#9ba99f", group, 0.42);
+        if (glassFacade) {
+          const glazedBand = new THREE.Mesh(new THREE.BoxGeometry(0.22, windowBandHeight, span - 1.5), glass);
+          glazedBand.position.set(sign * (facadeRadius + 2.06), 2.8 + windowBandHeight / 2, 0);
+          group.add(glazedBand);
+          for (let mullion = -5; mullion <= 5; mullion += 1) addBox(0.34, windowBandHeight + 0.2, 0.32, sign * (facadeRadius + 2.13), 2.8 + windowBandHeight / 2, mullion * (span / 11), "#9ba99f", group, 0.42);
+        } else if (openFacade) {
+          const posts = Math.max(6, Math.floor(span / 5));
+          for (let post = 0; post <= posts; post += 1) {
+            const z = -span / 2 + post * span / posts;
+            addBox(0.55, windowBandHeight + 0.4, 0.48, sign * (facadeRadius + 2.2), 2.8 + windowBandHeight / 2, z, "#d5d0bc", group, 0.62);
+          }
+          addBox(0.42, 0.28, span, sign * (facadeRadius + 2.32), 2.95, 0, club.colors[0], group, 0.52);
+        } else {
+          addBox(0.28, windowBandHeight, span - 1.5, sign * (facadeRadius + 2.06), 2.8 + windowBandHeight / 2, 0, facadeMaterial!, group, facadeType === "Brick & stone" ? 0.93 : 0.68);
+          const ribs = facadeType === "Ribbed metal" ? 13 : facadeType === "Exposed concrete" ? 6 : 8;
+          for (let rib = 0; rib <= ribs; rib += 1) {
+            const z = -span / 2 + rib * (span / ribs);
+            addBox(0.42, windowBandHeight + 0.18, facadeType === "Ribbed metal" ? 0.27 : 0.46, sign * (facadeRadius + 2.19), 2.8 + windowBandHeight / 2, z, facadeType === "Brick & stone" ? "#b38a67" : facadeType === "Ribbed metal" ? "#85928a" : "#999e96", group, 0.75);
+          }
+          for (let window = -2; window <= 2; window += 1) addBox(0.12, 1.15, 3.4, sign * (facadeRadius + 2.34), 4.4, window * (span / 6), "#b8c4ad", group, 0.42);
+        }
         const pierCount = compactGround ? 4 : 5;
         for (let pier = 0; pier <= pierCount; pier += 1) {
           const z = -span / 2 + pier * span / pierCount;
-          addBox(0.62, windowBandHeight + 0.55, 0.78, sign * (facadeRadius + 2.32), 2.8 + windowBandHeight / 2, z, isHeritage ? "#9b7756" : "#74857a", group, 0.56);
+          addBox(0.62, windowBandHeight + 0.55, 0.78, sign * (facadeRadius + 2.32), 2.8 + windowBandHeight / 2, z, facadeType === "Brick & stone" ? "#b38a67" : "#74857a", group, 0.56);
           addBox(1.25, 0.4, 1.5, sign * (facadeRadius + 2.34), 2.97 + windowBandHeight, z, club.colors[1], group, 0.42);
         }
         addBox(4.2, 0.7, span + 4, sign * facadeRadius, facadeHeight + 0.35, 0, façadeTint, group, 0.58);
@@ -479,6 +777,47 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
           addBox(2.15, 0.46, 4.3, sign * (facadeRadius + 2.75), 3.64, entranceZ, club.colors[0], group, 0.48);
           addBox(0.5, 2.75, 0.24, sign * (facadeRadius + 2.52), 1.82, entranceZ - 1.7, "#d0c49b", group, 0.55);
           addBox(0.5, 2.75, 0.24, sign * (facadeRadius + 2.52), 1.82, entranceZ + 1.7, "#d0c49b", group, 0.55);
+        }
+      }
+      const faceX = longSide ? 0 : sign * (facadeRadius + 2.55);
+      const faceZ = longSide ? sign * (facadeRadius + 2.55) : 0;
+      const faceRotation = longSide ? side === "north" ? Math.PI : 0 : side === "west" ? -Math.PI / 2 : Math.PI / 2;
+      const standName = draft.standNames[side]?.trim() || `${side[0].toUpperCase()}${side.slice(1)} Stand`;
+      addLabel(standName.toUpperCase(), faceX, Math.max(5.8, Math.min(10, facadeHeight - 1)), faceZ, Math.min(span * 0.47, 46), 1.9, club.colors[0], faceRotation);
+      const frontage = draft.standFrontages[side];
+      if (frontage !== "None") {
+        if (longSide) {
+          const panelWidth = Math.min(span * 0.44, 30);
+          addBox(panelWidth, 4.3, 0.5, 0, 4.5, sign * (facadeRadius + 2.38), frontage === "Club superstore" ? "#c6a35c" : frontage === "Restaurant" ? "#8b5b43" : "#637d69", group, 0.4);
+          addBox(panelWidth + 1.4, 0.46, 0.9, 0, 6.9, sign * (facadeRadius + 2.48), club.colors[0], group, 0.38);
+          addLabel(frontage.toUpperCase(), 0, 7.02, sign * (facadeRadius + 2.98), panelWidth * 0.84, 1.05, "#183027", side === "north" ? Math.PI : 0);
+        } else {
+          const panelWidth = Math.min(span * 0.44, 26);
+          addBox(0.5, 4.3, panelWidth, sign * (facadeRadius + 2.38), 4.5, 0, frontage === "Club superstore" ? "#c6a35c" : frontage === "Restaurant" ? "#8b5b43" : "#637d69", group, 0.4);
+          addBox(0.9, 0.46, panelWidth + 1.4, sign * (facadeRadius + 2.48), 6.9, 0, club.colors[0], group, 0.38);
+          addLabel(frontage.toUpperCase(), sign * (facadeRadius + 2.98), 7.02, 0, panelWidth * 0.84, 1.05, "#183027", side === "west" ? -Math.PI / 2 : Math.PI / 2);
+        }
+      }
+      if (giantEnd || design.profile === "modular" || design.profile === "truss" || design.profile === "ribbon") {
+        const trussColor = giantEnd ? "#7b8d86" : design.profile === "modular" ? "#adb7a9" : club.colors[1];
+        for (const edge of [-1, 1]) {
+          const base = new THREE.Vector3(longSide ? edge * halfSpan : sign * (startRadius + rows * rowRun), 3, longSide ? sign * (startRadius + rows * rowRun) : edge * halfSpan);
+          const top = new THREE.Vector3(longSide ? edge * halfSpan : sign * (outerRadius + 4), topY + 4, longSide ? sign * (outerRadius + 4) : edge * halfSpan);
+          beam(base, top, giantEnd ? 0.85 : 0.45, trussColor, group);
+          beam(new THREE.Vector3(base.x, top.y, base.z), new THREE.Vector3(top.x, base.y, top.z), giantEnd ? 0.45 : 0.28, trussColor, group);
+        }
+      }
+      if (design.profile === "modular") {
+        const moduleCount = Math.max(4, Math.floor(span / 18));
+        for (let module = 0; module <= moduleCount; module += 1) {
+          const along = -halfSpan + module * span / moduleCount;
+          if (longSide) {
+            beam(new THREE.Vector3(along, 1.2, sign * (outerRadius + 1.8)), new THREE.Vector3(along, topY + 2, sign * (outerRadius + 1.8)), 0.35, "#bec8b8", group);
+            addBox(0.9, 0.45, 0.6, along, 1.15, sign * (outerRadius + 1.8), "#d4bd77", group, 0.3);
+          } else {
+            beam(new THREE.Vector3(sign * (outerRadius + 1.8), 1.2, along), new THREE.Vector3(sign * (outerRadius + 1.8), topY + 2, along), 0.35, "#bec8b8", group);
+            addBox(0.6, 0.45, 0.9, sign * (outerRadius + 1.8), 1.15, along, "#d4bd77", group, 0.3);
+          }
         }
       }
       for (let tier = 0; tier < tierCount; tier += 1) {
@@ -508,11 +847,11 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
         }
       }
 
-      if (roofType !== "Open sky") {
+      if (roofType !== "Open sky" && mode !== "match") {
         // Cover the seating decks while leaving a clear central opening above the pitch.
         const lowestRoofTier = Math.max(0, tierCount - 2);
         const roofInner = Math.max(startRadius - 2, startRadius + lowestRoofTier * tierRun - 1.5);
-        const roofOuter = outerRadius + (design.profile === "cantilever" ? 9 : 6.5);
+        const roofOuter = outerRadius + Math.max(4.5, structure.overhang);
         const roofHeight = topY + 4.8;
         const retractable = roofType === "Retractable roof";
         const roofRuns = retractable ? [[-halfSpan, -2.6], [2.6, halfSpan]] : [[-halfSpan, halfSpan]];
@@ -528,8 +867,8 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
             for (let radialIndex = 0; radialIndex <= radialSegments; radialIndex += 1) {
               const r = radialIndex / radialSegments;
               const radius = roofInner + (roofOuter - roofInner) * r;
-              const wave = roofType === "Wave canopy" || design.profile === "asymmetric" ? Math.sin(t * Math.PI * 2 + r * 1.4) * 1.5 : 0;
-              const arch = roofType === "Continuous bowl" || design.profile === "crescent" || design.profile === "bowl" ? Math.sin(r * Math.PI) * 2.1 : 0;
+              const wave = roofType === "Wave canopy" || design.profile === "asymmetric" ? Math.sin(t * Math.PI * 2 + r * 1.4) * (1.2 + structure.curve * 5) : 0;
+              const arch = roofType === "Continuous bowl" || design.profile === "crescent" || design.profile === "bowl" ? Math.sin(r * Math.PI) * (1.8 + structure.curve * 5) : 0;
               const height = roofHeight + bow * 0.9 + arch + wave - r * (roofType === "Cantilever" ? 4.2 : 3.1);
               const x = longSide ? along : sign * radius;
               const z = longSide ? sign * radius : along;
@@ -573,6 +912,26 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
         const fasciaY = topY + 5.3;
         if (longSide) addBox(span + 2, 0.72, 0.82, 0, fasciaY, sign * (roofInner + 0.7), club.colors[0], group, 0.34);
         else addBox(0.82, 0.72, span + 2, sign * (roofInner + 0.7), fasciaY, 0, club.colors[0], group, 0.34);
+      }
+      if (side === "north" && draft.scoreboardLevel > 0) {
+        const screenWidth = 13 + Math.min(5, draft.scoreboardLevel * 0.45);
+        const screenHeight = 6 + Math.min(2.5, draft.scoreboardLevel * 0.24);
+        const screenY = topY + 6.1;
+        const screenZ = sign * (outerRadius + structure.overhang + 6.5);
+        const attachmentZ = sign * (outerRadius + 2.1);
+        const anchorY = Math.max(facadeHeight + 1.2, topY - 3.4);
+        addBox(screenWidth + 1.1, screenHeight + 0.9, 1.25, 0, screenY, screenZ, "#252d2a", group, 0.42);
+        for (const postX of [-screenWidth * 0.45, screenWidth * 0.45]) {
+          beam(new THREE.Vector3(postX, anchorY, attachmentZ), new THREE.Vector3(postX, screenY - screenHeight * 0.44, screenZ), 0.72, "#788880", group);
+          beam(new THREE.Vector3(postX, topY + 1.4, attachmentZ), new THREE.Vector3(postX, screenY + screenHeight * 0.45, screenZ), 0.42, club.colors[1], group);
+          addBox(1.1, 0.55, 1.5, postX, anchorY, attachmentZ, "#68766e", group, 0.48);
+        }
+        addBox(screenWidth + 2, 0.46, 1.8, 0, screenY - screenHeight * 0.53, screenZ, club.colors[0], group, 0.42);
+        const screenMap = labelTexture(`${club.shortName} · ${draft.scoreboardLevel} HD`, "#10231c");
+        const screenFace = new THREE.Mesh(new THREE.PlaneGeometry(screenWidth, screenHeight), new THREE.MeshBasicMaterial({ map: screenMap, side: THREE.DoubleSide, toneMapped: false }));
+        screenFace.position.set(0, screenY, screenZ + sign * 0.68);
+        if (sign < 0) screenFace.rotation.y = Math.PI;
+        group.add(screenFace);
       }
       const name = side === "north" || side === "south" ? club.stadium.name : club.name;
       const fasciaY = Math.max(4.2, outerFacadeY - 0.6);
@@ -677,7 +1036,7 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
               dummy.lookAt(0, y, 0);
               dummy.updateMatrix();
               cornerSeats.push(dummy.matrix.clone());
-              cornerColors.push(seatPalette[(Math.floor(seat / 8) + tier + (row % 3 === 0 ? 1 : 0)) % seatPalette.length]);
+              cornerColors.push(cornerSeatPalette[(Math.floor(seat / 8) + tier + (row % 3 === 0 ? 1 : 0)) % cornerSeatPalette.length]);
             }
           } else if (row % 2 === 0) {
             for (let rail = 0; rail < 8; rail += 1) {
@@ -779,10 +1138,6 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
       scene.add(group);
     });
 
-    if (draft.scoreboardLevel > 0) {
-      addBox(13, 7, 0.8, 0, 20 + draft.standTiers.north * 4, -43 - draft.standTiers.north * 11.2, "#101715", scene, 0.22);
-      addLabel(`${club.shortName} · ${draft.scoreboardLevel} HD`, 0, 20 + draft.standTiers.north * 4, -42 - draft.standTiers.north * 11.2, 11.5, 5.2, "#10231c");
-    }
     if (draft.ledBoardsLevel > 0) {
       addBox(100, 0.7, 0.6, 0, 1.05, -37, club.colors[0]);
       addBox(100, 0.7, 0.6, 0, 1.05, 37, club.colors[0]);
@@ -815,31 +1170,129 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
       parent.add(mesh);
       facilityPhotoTargets.push({ mesh, column: cell[0], row: cell[1] });
     };
-    const createBuilding = (name: string, x: number, z: number, width: number, depth: number, floors: number, color: string, photoCell: [number, number]) => {
+    const createBuilding = (name: string, x: number, z: number, width: number, depth: number, floors: number, color: string, photoCell: [number, number], style = "modern glass") => {
       const group = new THREE.Group();
       const floorHeight = 3.2;
+      const glassFront = /glass|atrium|interchange|market hall|performance|learning/i.test(style);
+      const brickFront = /brick|heritage|clubhouse|archive|lodge/i.test(style);
+      const openFront = /garden|courtyard|street food|covered terrace|plaza/i.test(style);
+      const wallColor = glassFront ? "#607e78" : brickFront ? "#75543f" : color;
+      const trimColor = brickFront ? "#d0ae79" : club.colors[0];
       for (let floor = 0; floor < floors; floor += 1) {
-        addBox(width, floorHeight, depth, x, floorHeight / 2 + floor * floorHeight, z, floor % 2 ? "#3c4c3d" : color, group, 0.62);
-        for (let window = 0; window < Math.max(2, Math.floor(width / 5)); window += 1) {
-          const windowX = x - width / 2 + 2.1 + window * ((width - 4.2) / Math.max(1, Math.floor(width / 5) - 1));
-          addBox(0.22, 1.05, 0.13, windowX, 1.75 + floor * floorHeight, z - depth / 2 - 0.08, "#d7d7a1", group, 0.2);
+        const floorY = floorHeight / 2 + floor * floorHeight;
+        const facadeWidth = openFront && floor === 0 ? width * 0.72 : width;
+        addBox(facadeWidth, floorHeight, depth, x, floorY, z, floor % 2 ? "#394b45" : wallColor, group, brickFront ? 0.88 : 0.5);
+        addBox(width + 0.18, 0.24, 0.28, x, floor * floorHeight + 0.28, z - depth / 2 - 0.13, trimColor, group, 0.42);
+        const windowCount = Math.max(3, Math.floor(width / 3.6));
+        const windowWidth = Math.min(2.7, width / (windowCount + 1) * 0.7);
+        for (let window = 0; window < windowCount; window += 1) {
+          const windowX = x - width / 2 + (window + 1) * (width / (windowCount + 1));
+          const glassColor = glassFront ? "#b1d0ca" : brickFront ? "#d6d8b8" : "#b0c2a9";
+          addBox(windowWidth, glassFront ? 2.12 : 1.62, 0.2, windowX, floorY + 0.18, z - depth / 2 - 0.18, glassColor, group, glassFront ? 0.22 : 0.32);
+          addBox(0.12, 2.35, 0.24, windowX, floorY + 0.18, z - depth / 2 - 0.2, trimColor, group, 0.5);
+        }
+        for (const side of [-1, 1]) {
+          addBox(0.2, 1.45, Math.min(2.5, depth / 5), x + side * (width / 2 + 0.12), floorY + 0.1, z, glassFront ? "#9ebcb5" : "#aeb8a4", group, 0.4);
         }
       }
-      addBox(width + 1.2, 0.8, depth + 1.2, x, floors * floorHeight + 0.4, z, club.colors[0]);
+      if (brickFront) {
+        const roofShape = new THREE.Shape();
+        roofShape.moveTo(-width / 2 - 0.7, 0); roofShape.lineTo(0, Math.max(2.2, width * 0.11)); roofShape.lineTo(width / 2 + 0.7, 0); roofShape.lineTo(width / 2 + 0.7, -0.45); roofShape.lineTo(-width / 2 - 0.7, -0.45); roofShape.closePath();
+        const roofMesh = new THREE.Mesh(new THREE.ExtrudeGeometry(roofShape, { depth: depth + 1.4, bevelEnabled: false }), material(style.includes("Heritage") || style.includes("brick") ? "#55493b" : trimColor, 0.84, 0.08));
+        roofMesh.position.set(x, floors * floorHeight + 0.85, z - depth / 2 - 0.7); roofMesh.castShadow = true; group.add(roofMesh);
+      } else {
+        addBox(width + 1.4, 0.82, depth + 1.4, x, floors * floorHeight + 0.4, z, trimColor, group, 0.46);
+        if (glassFront || /performance|learning/i.test(style)) {
+          for (const beamX of [-1, 1]) {
+            const canopySupport = addBox(0.24, 1.8, 0.24, x + beamX * width * 0.34, floors * floorHeight + 1.15, z - depth / 2 - 1.4, "#c8d6c8", group, 0.42);
+            canopySupport.rotation.z = beamX * -0.08;
+          }
+          addBox(width * 0.86, 0.24, 3.1, x, floors * floorHeight + 2, z - depth / 2 - 1.1, glassFront ? "#7ea39a" : club.colors[0], group, 0.38);
+        }
+      }
+      if (openFront) {
+        for (const side of [-1, 1]) addBox(0.48, 3, 0.48, x + side * width * 0.38, 1.7, z - depth / 2 - 0.7, "#d1c2a1", group, 0.52);
+        addBox(width + 2, 0.3, 4.2, x, 3.4, z - depth / 2 - 1.6, trimColor, group, 0.38);
+      }
+      addBox(Math.min(6, width * 0.24), 2.2, 0.34, x, 1.3, z - depth / 2 - 0.28, "#18241e", group, 0.32);
+      addBox(width * 0.52, 0.48, 2.2, x, 3.15, z - depth / 2 - 1.1, glassFront ? "#a5c8c0" : trimColor, group, 0.35);
       const nameBoard = new THREE.Mesh(new THREE.PlaneGeometry(width * 0.84, Math.min(2, width * 0.1)), new THREE.MeshBasicMaterial({ map: labelTexture(name, club.colors[0]), side: THREE.DoubleSide }));
-      nameBoard.position.set(x, Math.max(1.8, floors * floorHeight / 2), z - depth / 2 - 0.16);
+      nameBoard.position.set(x, floors * floorHeight + 1.05, z - depth / 2 - 0.55);
       group.add(nameBoard);
-      const photoSize = Math.max(4.6, Math.min(10, width * 0.52, floors * floorHeight * 0.86));
-      const photoY = floors * floorHeight * 0.55;
-      addFacilityPhoto(group, x, photoY, z + depth / 2 + 0.05, photoSize, photoCell);
-      addFacilityPhoto(group, x + width / 2 + 0.05, photoY, z, photoSize, photoCell, Math.PI / 2);
+      for (let column = -1; column <= 1; column += 1) {
+        const planterX = x + column * Math.min(5.2, width * 0.2);
+        addBox(Math.min(3.6, width * 0.16), 0.72, 1.05, planterX, 0.42, z - depth / 2 - 2.7, "#48513a", group, 0.88);
+        const shrub = new THREE.Mesh(new THREE.IcosahedronGeometry(0.72, 1), material("#648254"));
+        shrub.position.set(planterX, 1.05, z - depth / 2 - 2.7);
+        shrub.castShadow = true;
+        group.add(shrub);
+      }
+      const photoSize = Math.max(6, Math.min(13, width * 0.72, floors * floorHeight * 0.78));
+      const photoY = floors * floorHeight * 0.62;
+      addFacilityPhoto(group, x, photoY, z + depth / 2 + 0.06, photoSize, photoCell);
       scene.add(group);
     };
+    const createParkingGarage = (name: string, x: number, z: number, width: number, depth: number, floors: number) => {
+      const group = new THREE.Group();
+      const levelHeight = 3.5;
+      const posts = Math.max(3, Math.floor(width / 10));
+      for (let floor = 0; floor < floors; floor += 1) {
+        const deckY = 0.4 + floor * levelHeight;
+        addBox(width, 0.5, depth, x, deckY, z, floor % 2 ? "#9b9f91" : "#858d80", group, 0.82);
+        for (let post = 0; post <= posts; post += 1) {
+          const postX = x - width / 2 + post * (width / posts);
+          for (const side of [-1, 1]) addBox(0.55, levelHeight, 0.55, postX, deckY + levelHeight / 2, z + side * (depth / 2 - 0.6), "#d1cec0", group, 0.55);
+        }
+        for (let rail = 0; rail < posts; rail += 1) {
+          const railX = x - width / 2 + (rail + 0.5) * (width / posts);
+          addBox(width / posts - 0.35, 0.55, 0.2, railX, deckY + 0.56, z - depth / 2 + 0.4, "#c6c7b6", group, 0.48);
+          addBox(width / posts - 0.35, 0.55, 0.2, railX, deckY + 0.56, z + depth / 2 - 0.4, "#c6c7b6", group, 0.48);
+        }
+      }
+      const rampFrom = new THREE.Vector3(x - width * 0.32, 0.55, z + depth * 0.25);
+      const rampTo = new THREE.Vector3(x + width * 0.32, 0.55 + (floors - 1) * levelHeight, z + depth * 0.25);
+      beam(rampFrom, rampTo, 0.7, "#b8b9aa", group);
+      addBox(width * 0.62, 1.3, 0.5, x, floors * levelHeight + 0.2, z - depth / 2 - 0.32, club.colors[0], group, 0.38);
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(width * 0.57, 1.05), new THREE.MeshBasicMaterial({ map: labelTexture(name, club.colors[0]), side: THREE.DoubleSide }));
+      sign.position.set(x, floors * levelHeight + 0.2, z - depth / 2 - 0.62);
+      group.add(sign);
+      scene.add(group);
+    };
+    const facilityIndex: Record<StadiumFacilityKey, number> = { carPark: 6, superstore: 0, restaurant: 1, hotel: 2, fanZone: 3, museum: 4, transportHub: 5, trainingGround: 7, trainingPitches: 8, academy: 9, youthStadium: 10 };
+    const facilityPosition = (key: StadiumFacilityKey, width = 24, depth = 18) => {
+      const location = draft.facilityPlan[key].location;
+      const index = facilityIndex[key] - 3;
+      const edgeX = Math.min(siteInnerX + 36, campusWidth / 2 - width / 2 - 8);
+      const edgeZ = Math.min(siteInnerZ + 36, campusDepth / 2 - depth / 2 - 8);
+      const northSouthOffset = THREE.MathUtils.clamp(index * 26, -edgeX, edgeX);
+      const eastWestOffset = THREE.MathUtils.clamp(index * 22, -edgeZ, edgeZ);
+      const defaultPosition = location === "north" ? { x: northSouthOffset, z: -edgeZ } : location === "south" ? { x: northSouthOffset, z: edgeZ } : location === "east" ? { x: edgeX, z: eastWestOffset } : { x: -edgeX, z: eastWestOffset };
+      const saved = draft.facilityPlan[key].position;
+      let x = THREE.MathUtils.clamp(saved?.x ?? defaultPosition.x, -campusWidth / 2 + width / 2 + 5, campusWidth / 2 - width / 2 - 5);
+      let z = THREE.MathUtils.clamp(saved?.z ?? defaultPosition.z, -campusDepth / 2 + depth / 2 + 5, campusDepth / 2 - depth / 2 - 5);
+      if (Math.abs(x) < siteInnerX && Math.abs(z) < siteInnerZ) {
+        const toX = siteInnerX - Math.abs(x);
+        const toZ = siteInnerZ - Math.abs(z);
+        if (toX < toZ) x = Math.sign(x || 1) * Math.min(campusWidth / 2 - width / 2 - 5, siteInnerX + width / 2 + 8);
+        else z = Math.sign(z || 1) * Math.min(campusDepth / 2 - depth / 2 - 5, siteInnerZ + depth / 2 + 8);
+      }
+      return { x, z };
+    };
+    const addAccessPath = (x: number, z: number, width = 5.5) => {
+      const fromX = THREE.MathUtils.clamp(x, -siteInnerX - 24, siteInnerX + 24);
+      const fromZ = THREE.MathUtils.clamp(z, -siteInnerZ - 24, siteInnerZ + 24);
+      const dx = x - fromX;
+      const dz = z - fromZ;
+      const length = Math.hypot(dx, dz);
+      if (length < 3) return;
+      const route = addBox(length, 0.12, width, (x + fromX) / 2, -0.035, (z + fromZ) / 2, roadLevel >= 2 ? "#454b47" : "#bab7a6", scene, 0.96);
+      route.rotation.y = -Math.atan2(dz, dx);
+      route.receiveShadow = true;
+      if (roadLevel >= 2) addBox(0.12, 0.035, 2.2, (x + fromX) / 2, 0.035, (z + fromZ) / 2, "#e2d7ad", scene, 0.84);
+    };
+    const facilitySizeScale = (key: StadiumFacilityKey) => facilitySizeFactor(draft.facilityPlan[key].size);
+    const facilityFloors = (key: StadiumFacilityKey, base: number, level: number) => Math.max(1, Math.min(7, base + Math.floor(level / 2) + (draft.facilityPlan[key].size === "Flagship" ? 1 : 0)));
     const amenityScale = THREE.MathUtils.clamp(contextScale, 0.78, 1);
-    const amenityX = siteInnerX + 32;
-    const amenityZ = siteInnerZ * 0.64;
-    const outerFacilityX = siteInnerX + 58;
-    const outerFacilityZ = siteInnerZ + 20;
     const gravelMaterial = new THREE.MeshStandardMaterial({ map: buildParkingTexture("gravel"), roughness: 1 });
     const asphaltMaterial = new THREE.MeshStandardMaterial({ map: buildParkingTexture("asphalt"), roughness: 0.98 });
     const addVehicle = (x: number, z: number, color: string, scale = 1) => {
@@ -881,27 +1334,126 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
         addBox(1.05, 0.16, 0.54, lampX, 5.45, z + depth / 2 - 1.3, "#e8edcf", scene, 0.26);
       }
     };
-    if (draft.superstoreLevel > 0) createBuilding("CLUB SUPERSTORE", -amenityX, -amenityZ, (19 + draft.superstoreLevel * 2) * amenityScale, 14 * amenityScale, 2 + draft.superstoreLevel, "#3b4934", [0, 0]);
-    if (draft.restaurantLevel > 0) createBuilding("MATCHDAY DINING", amenityX, amenityZ, (20 + draft.restaurantLevel * 2) * amenityScale, 15 * amenityScale, 2 + draft.restaurantLevel, "#4a4431", [2, 0]);
-    if (draft.hotelLevel > 0) createBuilding("THE CLUB HOTEL", amenityX, outerFacilityZ, (26 + draft.hotelLevel * 2) * amenityScale, 16 * amenityScale, 3 + draft.hotelLevel, "#38473d", [0, 1]);
-    if (draft.fanZoneLevel > 0) createBuilding("FAN ZONE", -amenityX, -outerFacilityZ, (22 + draft.fanZoneLevel * 2) * amenityScale, 15 * amenityScale, 2, "#354532", [2, 1]);
-    if (draft.museumLevel > 0) createBuilding("CLUB MUSEUM", 0, siteInnerZ + 39, (21 + draft.museumLevel * 2) * amenityScale, 13 * amenityScale, 2 + draft.museumLevel, "#413d2f", [1, 1]);
-    if (draft.transportHubLevel > 0) {
-      const hubX = -outerFacilityX;
-      createBuilding("RAIL · COACH · WALK", hubX, 0, (18 + draft.transportHubLevel * 3) * amenityScale, 12 * amenityScale, 2, "#35433c", [1, 0]);
-      for (let lane = 0; lane < 3; lane += 1) addBox(14 * amenityScale, 0.2, 1.1, hubX, 0.03, 1 + lane * 3, "#b3bf99");
+    const buildingSpecs: { key: StadiumFacilityKey; level: number; name: string; width: number; depth: number; floors: number; color: string; photo: [number, number] }[] = [
+      { key: "superstore", level: draft.superstoreLevel, name: "CLUB SUPERSTORE", width: 20, depth: 14, floors: 2, color: "#9c7652", photo: [0, 0] },
+      { key: "restaurant", level: draft.restaurantLevel, name: "MATCHDAY DINING", width: 21, depth: 15, floors: 2, color: "#98754c", photo: [2, 0] },
+      { key: "hotel", level: draft.hotelLevel, name: "THE CLUB HOTEL", width: 25, depth: 16, floors: 4, color: "#839a9c", photo: [0, 1] },
+      { key: "fanZone", level: draft.fanZoneLevel, name: "SUPPORTERS’ FAN ZONE", width: 23, depth: 15, floors: 1, color: "#879268", photo: [2, 1] },
+      { key: "museum", level: draft.museumLevel, name: "CLUB MUSEUM", width: 21, depth: 13, floors: 2, color: "#99714e", photo: [1, 1] },
+      { key: "transportHub", level: draft.transportHubLevel, name: "RAIL · COACH · WALK", width: 23, depth: 14, floors: 1, color: "#8d9b88", photo: [1, 0] },
+      { key: "trainingGround", level: draft.trainingCentreLevel, name: "PERFORMANCE CENTRE", width: 30, depth: 20, floors: 2, color: "#637f72", photo: [0, 0] },
+      { key: "trainingPitches", level: draft.trainingPitchesLevel, name: "TRAINING PITCHES", width: 68, depth: 47, floors: 0, color: "#4f7d4c", photo: [2, 1] },
+      { key: "academy", level: draft.academyCampusLevel, name: "ACADEMY CAMPUS", width: 26, depth: 18, floors: 2, color: "#a17b52", photo: [1, 1] },
+      { key: "youthStadium", level: draft.youthStadiumLevel, name: "YOUTH STADIUM", width: 58, depth: 44, floors: 0, color: "#506b56", photo: [2, 1] },
+    ];
+    const createTrainingPitches = (x: number, z: number, width: number, depth: number, style: string, level: number) => {
+      const base = new THREE.Mesh(new THREE.PlaneGeometry(width, depth), material("#b1aa91", 0.98, 0));
+      base.rotation.x = -Math.PI / 2; base.position.set(x, -0.02, z); base.receiveShadow = true; scene.add(base);
+      const count = width > 95 ? 3 : width > 65 || level > 1 ? 2 : 1;
+      const gap = Math.min(4, width * 0.035);
+      const fieldWidth = (width * 0.9 - gap * (count - 1)) / count;
+      const fieldDepth = depth * 0.82;
+      const surface = /all-weather/i.test(style) ? "#286545" : /hybrid/i.test(style) ? "#38734d" : "#4d8550";
+      for (let field = 0; field < count; field += 1) {
+        const fieldX = x - ((count - 1) * (fieldWidth + gap)) / 2 + field * (fieldWidth + gap);
+        const pitchMesh = new THREE.Mesh(new THREE.PlaneGeometry(fieldWidth, fieldDepth), material(surface, 0.94, /all-weather/i.test(style) ? 0.025 : 0));
+        pitchMesh.rotation.x = -Math.PI / 2; pitchMesh.position.set(fieldX, 0.055, z); pitchMesh.receiveShadow = true; scene.add(pitchMesh);
+        const stripes = 8;
+        for (let strip = 0; strip < stripes; strip += 1) if (strip % 2 === 0) addBox(fieldWidth / stripes, 0.018, fieldDepth - 0.3, fieldX - fieldWidth / 2 + (strip + 0.5) * fieldWidth / stripes, 0.072, z, "#74a96c", scene, 0.98);
+        const line = (lineWidth: number, lineDepth: number, lx: number, lz: number) => addBox(lineWidth, 0.026, lineDepth, lx, 0.09, lz, "#e8edcf", scene, 0.66);
+        line(fieldWidth - 1, 0.16, fieldX, z - fieldDepth / 2); line(fieldWidth - 1, 0.16, fieldX, z + fieldDepth / 2);
+        line(0.16, fieldDepth, fieldX - fieldWidth / 2, z); line(0.16, fieldDepth, fieldX + fieldWidth / 2, z);
+        line(fieldWidth - 1, 0.12, fieldX, z);
+        const circle = new THREE.Mesh(new THREE.TorusGeometry(Math.min(fieldDepth * 0.095, fieldWidth * 0.11), 0.07, 5, 36), material("#e8edcf"));
+        circle.rotation.x = Math.PI / 2; circle.position.set(fieldX, 0.095, z); scene.add(circle);
+        const goalWidth = Math.min(4, fieldWidth * 0.13);
+        for (const end of [-1, 1]) {
+          const goalZ = z + end * (fieldDepth / 2 - 0.25);
+          for (const post of [-1, 1]) addBox(0.1, 1.9, 0.1, fieldX + post * goalWidth / 2, 1.0, goalZ, "#eef0dd", scene, 0.5);
+          addBox(goalWidth, 0.1, 0.1, fieldX, 1.9, goalZ, "#eef0dd", scene, 0.5);
+        }
+        for (const side of [-1, 1]) for (let post = 0; post <= 8; post += 1) addBox(0.16, 2.1, 0.16, fieldX + side * (fieldWidth / 2 + 0.8), 1.05, z - fieldDepth / 2 + post * fieldDepth / 8, "#71857a", scene, 0.65);
+      }
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(width * 0.42, 27), 2.8), new THREE.MeshBasicMaterial({ map: labelTexture("TRAINING CAMPUS", club.colors[0]), side: THREE.DoubleSide }));
+      sign.position.set(x, 2.4, z - depth / 2 - 1.8); scene.add(sign);
+    };
+    const createYouthStadium = (x: number, z: number, width: number, depth: number, style: string, level: number) => {
+      const pitchWidth = width * 0.68;
+      const pitchDepth = depth * 0.68;
+      const pitchMesh = new THREE.Mesh(new THREE.PlaneGeometry(pitchWidth, pitchDepth), material("#4d8050", 0.94, 0));
+      pitchMesh.rotation.x = -Math.PI / 2; pitchMesh.position.set(x, 0.1, z); pitchMesh.receiveShadow = true; scene.add(pitchMesh);
+      for (let strip = 0; strip < 8; strip += 1) if (strip % 2 === 0) addBox(pitchWidth / 8, 0.02, pitchDepth - 0.3, x - pitchWidth / 2 + (strip + 0.5) * pitchWidth / 8, 0.12, z, "#73a669", scene, 0.96);
+      const boundary = (w: number, d: number, bx: number, bz: number) => addBox(w, 0.035, d, bx, 0.145, bz, "#e8edcf", scene, 0.6);
+      boundary(pitchWidth, 0.14, x, z - pitchDepth / 2); boundary(pitchWidth, 0.14, x, z + pitchDepth / 2); boundary(0.14, pitchDepth, x - pitchWidth / 2, z); boundary(0.14, pitchDepth, x + pitchWidth / 2, z); boundary(pitchWidth, 0.1, x, z);
+      for (const side of [-1, 1]) {
+        const endStand = side < 0 && /community bowl/i.test(style);
+        const standWidth = endStand ? pitchWidth * 0.48 : width * 0.82;
+        const standDepth = Math.max(4, depth * 0.14);
+        const standZ = z + side * (depth / 2 - standDepth / 2);
+        const standColor = side < 0 ? club.colors[0] : "#6d7770";
+        const rows = Math.min(7, 3 + level);
+        for (let row = 0; row < rows; row += 1) {
+          const rowWidth = standWidth - row * 1.1;
+          addBox(rowWidth, 0.75, 1.15, x, 0.75 + row * 0.8, standZ + side * row * 0.32, row % 2 ? "#68736c" : standColor, scene, 0.77);
+          for (let seat = 0; seat < Math.floor(rowWidth / 1.7); seat += 1) addBox(0.56, 0.25, 0.62, x - rowWidth / 2 + 0.9 + seat * ((rowWidth - 1.8) / Math.max(1, Math.floor(rowWidth / 1.7) - 1)), 1.2 + row * 0.8, standZ + side * row * 0.32, club.colors[0], scene, 0.55);
+        }
+        if (!/open/i.test(style)) addBox(standWidth + 3, 0.7, standDepth + 5, x, 4.9 + rows * 0.8, standZ - side * 0.2, /covered|arena/i.test(style) ? club.colors[0] : "#d9d8cb", scene, 0.44);
+        for (let post = -1; post <= 1; post += 2) addBox(0.4, 5.2, 0.4, x + post * (standWidth / 2 + 1), 2.6, standZ, "#6d7b70", scene, 0.65);
+      }
+      addBox(width + 3, 0.14, depth + 3, x, 0, z, "#968f7a", scene, 0.94);
+      const sign = new THREE.Mesh(new THREE.PlaneGeometry(width * 0.52, 2.1), new THREE.MeshBasicMaterial({ map: labelTexture("ACADEMY MATCHDAY", club.colors[0]), side: THREE.DoubleSide }));
+      sign.position.set(x, 1.9, z - depth / 2 - 1.9); scene.add(sign);
+    };
+    const occupiedFacilitySites: FacilitySiteFootprint[] = [];
+    const footprintFor = (key: StadiumFacilityKey): Omit<FacilitySiteFootprint, "x" | "z" | "key"> => {
+      if (key === "carPark") {
+        const scale = amenityScale * facilitySizeScale("carPark");
+        const officialParking = draft.capacity >= 18_000;
+        return { width: (officialParking ? 48 : 32) * scale + draft.carParkLevel * 2.5, depth: (officialParking ? 34 : 24) * scale + draft.carParkLevel * 1.5 };
+      }
+      const spec = buildingSpecs.find((item) => item.key === key);
+      if (!spec) return { width: 24 * amenityScale, depth: 18 * amenityScale };
+      const scale = amenityScale * facilitySizeScale(key);
+      return { width: (spec.width + spec.level * 1.5) * scale, depth: spec.depth * scale };
+    };
+    for (const asset of buildingSpecs) {
+      if (asset.level <= 0) continue;
+      const scale = amenityScale * facilitySizeScale(asset.key);
+      const width = (asset.width + asset.level * 1.5) * scale;
+      const depth = asset.depth * scale;
+      const { x, z } = facilityPosition(asset.key, width, depth);
+      occupiedFacilitySites.push({ key: asset.key, x, z, width, depth });
+      addAccessPath(x, z, roadLevel >= 1 ? 5.5 : 3.6);
+      if (asset.key === "trainingPitches") createTrainingPitches(x, z, width, depth, draft.facilityPlan[asset.key].style, asset.level);
+      else if (asset.key === "youthStadium") createYouthStadium(x, z, width, depth, draft.facilityPlan[asset.key].style, asset.level);
+      else createBuilding(asset.name, x, z, width, depth, facilityFloors(asset.key, asset.floors, asset.level), asset.color, asset.photo, draft.facilityPlan[asset.key].style);
     }
     if (draft.carParkLevel > 0) {
+      const layout = draft.facilityPlan.carPark;
+      const scale = amenityScale * facilitySizeScale("carPark");
       const officialParking = draft.capacity >= 18_000;
-      const parkingSurface = officialParking ? "asphalt" : "gravel";
-      const parkingName = officialParking ? "OFFICIAL PARKING · EAST" : "VISITOR PARKING · GRAVEL";
-      createBuilding(parkingName, -outerFacilityX, outerFacilityZ + 19, (23 + draft.carParkLevel * 2) * amenityScale, 18 * amenityScale, 2 + draft.carParkLevel, "#39483e", [1, 0]);
-      createBuilding(officialParking ? "NORTH CAR PARK" : "COACH & ACCESS PARKING", outerFacilityX, -outerFacilityZ - 19, (23 + draft.carParkLevel * 2) * amenityScale, 18 * amenityScale, 2 + draft.carParkLevel, "#39483e", [1, 0]);
-      for (const [x, z] of [[-siteInnerX - 51, siteInnerZ * 0.56], [siteInnerX + 51, -siteInnerZ * 0.56]]) {
-        const width = (officialParking ? 48 : 30) * amenityScale + draft.carParkLevel * 7;
-        const depth = (officialParking ? 36 : 24) * amenityScale + draft.carParkLevel * 4;
-        const parkedCars = Math.round((officialParking ? 18 : 6) * amenityScale + draft.carParkLevel * 3);
-        createParkingLot(x, z, width, depth, parkingSurface, parkedCars);
+      const width = (officialParking ? 48 : 32) * scale + draft.carParkLevel * 2.5;
+      const depth = (officialParking ? 34 : 24) * scale + draft.carParkLevel * 1.5;
+      const { x, z } = facilityPosition("carPark", width, depth);
+      occupiedFacilitySites.push({ key: "carPark", x, z, width, depth });
+      addAccessPath(x, z, roadLevel >= 1 ? 7 : 4.4);
+      const cars = Math.round((officialParking ? 18 : 8) * scale + draft.carParkLevel * 2);
+      if (layout.style === "Open parking deck") {
+        createParkingGarage(officialParking ? "OFFICIAL PARKING" : "VISITOR PARKING", x, z, width, depth, Math.max(1, Math.min(5, draft.carParkLevel + (layout.size === "Flagship" ? 1 : 0))));
+      } else {
+        const surface = layout.style === "Gravel terrace" ? "gravel" : "asphalt";
+        createParkingLot(x, z, width, depth, surface, cars);
+        if (layout.style === "Solar canopy") {
+          for (let row = -1; row <= 1; row += 2) {
+            const canopyZ = z + row * depth * 0.27;
+            addBox(width * 0.88, 0.22, 6.2 * scale, x, 4.4 * scale, canopyZ, "#344b4b", scene, 0.28);
+            for (const side of [-1, 1]) addBox(0.25, 4.3 * scale, 0.25, x + side * width * 0.42, 2.15 * scale, canopyZ, "#98a89c", scene, 0.58);
+          }
+        }
+        addBox(Math.min(12, width * 0.32), 1.7, 0.5, x, 1, z - depth / 2 - 0.4, club.colors[0], scene, 0.34);
+        const parkingSign = new THREE.Mesh(new THREE.PlaneGeometry(Math.min(10, width * 0.27), 1.3), new THREE.MeshBasicMaterial({ map: labelTexture(officialParking ? "OFFICIAL PARKING" : "GRAVEL PARKING", club.colors[0]), side: THREE.DoubleSide }));
+        parkingSign.position.set(x, 1, z - depth / 2 - 0.7);
+        scene.add(parkingSign);
       }
     } else if (compactGround) {
       createParkingLot(-siteInnerX - 42, siteInnerZ * 0.48, 26 * amenityScale, 21 * amenityScale, "gravel", 6);
@@ -940,7 +1492,9 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
       crown.castShadow = true;
       scene.add(crown);
     };
-    for (let tree = 0; tree < 24; tree += 1) {
+    const siteSetting: StadiumSiteSetting = draft.siteSetting ?? "Suburban campus";
+    const urbanSetting = ["Dense terraces", "Railway quarter", "Industrial fringe", "Market streets"].includes(siteSetting);
+    for (let tree = 0; tree < (urbanSetting ? 10 : 24); tree += 1) {
       const angle = tree / 24 * Math.PI * 2;
       const x = Math.cos(angle) * (siteInnerX + 57);
       const z = Math.sin(angle) * (siteInnerZ + 43);
@@ -989,6 +1543,86 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
       }
     }
 
+    addStadiumContext(scene, club, siteSetting, siteInnerX, siteInnerZ, addTree, acquiredLand);
+    for (const side of acquiredLand) {
+      const { width, depth, centerX, centerZ } = getStadiumLandParcel(siteInnerX, siteInnerZ, side);
+      const urbanParcel = ["Dense terraces", "Railway quarter", "Industrial fringe", "Market streets"].includes(siteSetting);
+      addPlane(width - 8, depth - 8, centerX, 0.025, centerZ, urbanParcel ? "#7b7766" : "#687c62");
+      addBox(width - 4, 0.38, 1.2, centerX, 0.05, centerZ - depth / 2 + 1.5, "#9e9d8d", scene, 0.96);
+      addBox(width - 4, 0.38, 1.2, centerX, 0.05, centerZ + depth / 2 - 1.5, "#9e9d8d", scene, 0.96);
+      addBox(1.2, 0.38, depth - 4, centerX - width / 2 + 1.5, 0.05, centerZ, "#9e9d8d", scene, 0.96);
+      addBox(1.2, 0.38, depth - 4, centerX + width / 2 - 1.5, 0.05, centerZ, "#9e9d8d", scene, 0.96);
+      const postMaterial = material("#59645e", 0.6, 0.42);
+      const railMaterial = material("#77827a", 0.52, 0.5);
+      const postCount = 7;
+      for (let index = 0; index <= postCount; index += 1) {
+        const t = -0.5 + index / postCount;
+        if (side === "north" || side === "south") {
+          for (const edge of [-1, 1]) {
+            const fenceZ = centerZ + edge * (depth / 2 - 2.2);
+            if (edge === (side === "north" ? 1 : -1) && Math.abs(t) < 0.12) continue;
+            const postX = centerX + t * (width - 6);
+            addBox(0.34, 2.1, 0.34, postX, 1.05, fenceZ, postMaterial, scene, 0.54);
+          }
+          for (const edge of [-1, 1]) {
+            const fenceX = centerX + edge * (width / 2 - 2.2);
+            addBox(0.3, 1.7, 0.3, fenceX, 0.85, centerZ + t * (depth - 6), postMaterial, scene, 0.55);
+          }
+        } else {
+          for (const edge of [-1, 1]) {
+            const fenceX = centerX + edge * (width / 2 - 2.2);
+            if (edge === (side === "east" ? -1 : 1) && Math.abs(t) < 0.12) continue;
+            const postZ = centerZ + t * (depth - 6);
+            addBox(0.34, 2.1, 0.34, fenceX, 1.05, postZ, postMaterial, scene, 0.54);
+          }
+          for (const edge of [-1, 1]) {
+            const fenceZ = centerZ + edge * (depth / 2 - 2.2);
+            addBox(0.3, 1.7, 0.3, centerX + t * (width - 6), 0.85, fenceZ, postMaterial, scene, 0.55);
+          }
+        }
+      }
+      const railSections = 14;
+      for (const edge of [-1, 1]) {
+        for (let segment = 0; segment < railSections; segment += 1) {
+          const t = -0.5 + (segment + 0.5) / railSections;
+          const horizontalGate = (side === "north" && edge === 1) || (side === "south" && edge === -1);
+          if (!(horizontalGate && Math.abs(t) < 0.08)) {
+            const horizontalSpan = (width - 6) / railSections - 0.6;
+            const fenceZ = centerZ + edge * (depth / 2 - 2.2);
+            const fenceX = centerX + t * (width - 6);
+            addBox(horizontalSpan, 0.16, 0.16, fenceX, 0.82, fenceZ, railMaterial, scene, 0.52);
+            addBox(horizontalSpan, 0.14, 0.14, fenceX, 1.52, fenceZ, railMaterial, scene, 0.52);
+          }
+          const verticalGate = (side === "east" && edge === -1) || (side === "west" && edge === 1);
+          if (!(verticalGate && Math.abs(t) < 0.08)) {
+            const verticalSpan = (depth - 6) / railSections - 0.6;
+            const fenceX = centerX + edge * (width / 2 - 2.2);
+            const fenceZ = centerZ + t * (depth - 6);
+            addBox(0.16, 0.16, verticalSpan, fenceX, 0.82, fenceZ, railMaterial, scene, 0.52);
+            addBox(0.14, 0.14, verticalSpan, fenceX, 1.52, fenceZ, railMaterial, scene, 0.52);
+          }
+        }
+      }
+      if (side === "north" || side === "south") {
+        const innerEdge = side === "north" ? centerZ + depth / 2 : centerZ - depth / 2;
+        const connection = side === "north" ? -(siteInnerZ + 28) : siteInnerZ + 28;
+        const pathLength = Math.abs(innerEdge - connection);
+        addBox(7.2, 0.13, pathLength, centerX, -0.045, (innerEdge + connection) / 2, (draft.siteRoadLevel ?? 0) >= 1 ? "#454b47" : "#aaa897", scene, 0.94);
+      } else {
+        const innerEdge = side === "east" ? centerX - width / 2 : centerX + width / 2;
+        const connection = side === "east" ? siteInnerX + 28 : -(siteInnerX + 28);
+        const pathLength = Math.abs(innerEdge - connection);
+        addBox(pathLength, 0.13, 7.2, (innerEdge + connection) / 2, -0.045, centerZ, (draft.siteRoadLevel ?? 0) >= 1 ? "#454b47" : "#aaa897", scene, 0.94);
+      }
+      const signX = side === "east" ? centerX - width / 2 - 0.6 : side === "west" ? centerX + width / 2 + 0.6 : centerX;
+      const signZ = side === "north" ? centerZ + depth / 2 + 0.6 : side === "south" ? centerZ - depth / 2 - 0.6 : centerZ;
+      const signRotation = side === "north" ? 0 : side === "south" ? Math.PI : side === "east" ? -Math.PI / 2 : Math.PI / 2;
+      addLabel(`CLUB LAND · ${side.toUpperCase()}`, signX, 2.8, signZ, 26, 2.8, club.colors[0], signRotation);
+      for (const [xOffset, zOffset] of [[-width * 0.28, -depth * 0.23], [width * 0.28, -depth * 0.23], [-width * 0.28, depth * 0.23], [width * 0.28, depth * 0.23]] as const) {
+        addBox(0.55, 0.8, 0.55, centerX + xOffset, 0.45, centerZ + zOffset, "#d7bf7b", scene, 0.48);
+      }
+    }
+
     if (draft.project) {
       addBox(0.65, 30, 0.65, 100, 15, -48, "#b9aa74");
       addBox(33, 0.45, 0.45, 84, 29.6, -48, "#b9aa74");
@@ -1002,8 +1636,8 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
     controls.target.set(0, 8, 0);
     controls.enableDamping = true;
     controls.dampingFactor = 0.055;
-    controls.minDistance = 145;
-    controls.maxDistance = 520;
+    controls.minDistance = mode === "match" ? 78 : 145;
+    controls.maxDistance = mode === "match" ? 430 : 1450;
     controls.maxPolarAngle = Math.PI * 0.47;
     controls.minPolarAngle = Math.PI * 0.12;
     controls.screenSpacePanning = true;
@@ -1021,9 +1655,38 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
       const distance = Math.hypot(event.clientX - pointerStart[0], event.clientY - pointerStart[1]);
       pointerStart = null;
       if (distance > 7) return;
+      if (mode === "match") return;
       const bounds = renderer.domElement.getBoundingClientRect();
       pointer.set(((event.clientX - bounds.left) / bounds.width) * 2 - 1, -((event.clientY - bounds.top) / bounds.height) * 2 + 1);
       raycaster.setFromCamera(pointer, camera);
+      const placing = placementFacilityRef.current;
+      if (placing) {
+        const ground = raycaster.ray.intersectPlane(new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), new THREE.Vector3());
+        if (ground) {
+          const footprint = footprintFor(placing);
+          const xLimit = Math.max(0, campusWidth / 2 - footprint.width / 2 - 8);
+          const zLimit = Math.max(0, campusDepth / 2 - footprint.depth / 2 - 8);
+          let x = THREE.MathUtils.clamp(ground.x, -xLimit, xLimit);
+          let z = THREE.MathUtils.clamp(ground.z, -zLimit, zLimit);
+          if (Math.abs(x) < siteInnerX && Math.abs(z) < siteInnerZ) {
+            const toX = siteInnerX - Math.abs(x);
+            const toZ = siteInnerZ - Math.abs(z);
+            if (toX < toZ) x = Math.sign(x || 1) * Math.min(xLimit, siteInnerX + 34);
+            else z = Math.sign(z || 1) * Math.min(zLimit, siteInnerZ + 30);
+          }
+          if (!campusPlotIsOwned(x, z, footprint.width, footprint.depth, siteInnerX, siteInnerZ, draft.acquiredLand ?? [])) {
+            setPlacementNotice("That plot is outside club land. Acquire the neighboring parcel under Upgrade → Land & plots first.");
+            return;
+          }
+          if (facilitySiteHasCollision({ key: placing, x, z, ...footprint }, occupiedFacilitySites)) {
+            setPlacementNotice("That plot overlaps another facility. Click a clear space around the stadium.");
+            return;
+          }
+          setPlacementNotice("");
+          placeFacilityRef.current(placing, { x: Math.round(x), z: Math.round(z) });
+        }
+        return;
+      }
       const hit = raycaster.intersectObjects(standPickTargets, true)[0];
       let target: THREE.Object3D | null = hit?.object ?? null;
       while (target && !target.userData.standSide) target = target.parent;
@@ -1040,7 +1703,7 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
         } else selectStandRef.current(target.userData.standSide as StandSide);
       }
     };
-    renderer.domElement.style.cursor = "grab";
+    renderer.domElement.style.cursor = placementFacility ? "crosshair" : "grab";
     renderer.domElement.addEventListener("pointerdown", onPointerDown);
     renderer.domElement.addEventListener("pointerup", onPointerUp);
     const resize = new ResizeObserver(() => {
@@ -1054,6 +1717,16 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
     let animation = 0;
     const renderFrame = () => {
       animation = window.requestAnimationFrame(renderFrame);
+      if (matchBall) {
+        const time = performance.now() / 1000 + matchMinuteRef.current * 0.035;
+        matchBall.position.set(Math.sin(time * 0.47) * 37, 0.62 + Math.abs(Math.sin(time * 1.8)) * 0.12, Math.cos(time * 0.31) * 23);
+        movingPlayers.forEach((player) => {
+          const timeOffset = time + player.phase;
+          player.group.position.x = player.x + Math.sin(timeOffset * 0.72) * 2.8;
+          player.group.position.z = player.z + Math.cos(timeOffset * 0.58) * 2.2;
+          player.group.rotation.y = Math.sin(timeOffset * 0.32) * 0.18;
+        });
+      }
       controls.update();
       renderer.render(scene, camera);
     };
@@ -1061,7 +1734,9 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
 
     return () => {
       sceneDisposed = true;
-      cameraPositionRef.current = camera.position.toArray() as [number, number, number];
+      cameraPositionRef.current = cameraLayoutSignatureRef.current === sceneCameraSignature
+        ? camera.position.toArray() as [number, number, number]
+        : null;
       window.cancelAnimationFrame(animation);
       resize.disconnect();
       controls.dispose();
@@ -1079,10 +1754,11 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
         }
       });
       materials.clear();
+      skyTexture?.dispose();
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [club, draft, preset]);
+  }, [club, draft, matchPlayers, mode, preset, viewLayoutSignature]);
 
   useEffect(() => {
     for (const side of ["north", "east", "south", "west"] as const) {
@@ -1091,11 +1767,18 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
     }
   }, [selectedStand]);
 
+  useEffect(() => {
+    const canvas = stageRef.current?.querySelector("canvas");
+    if (canvas) canvas.style.cursor = placementFacility ? "crosshair" : "grab";
+    setPlacementNotice("");
+  }, [placementFacility]);
+
   const resetView = (next: ViewPreset) => {
     setPreset(next);
     const groundScale = Math.sqrt(THREE.MathUtils.clamp(draft.capacity / 24_600, 0.42, 1.8));
     const cameraScale = 0.72 + groundScale * 0.28;
-    const position = CAMERA[next].map((coordinate) => coordinate * cameraScale) as [number, number, number];
+    const campusExpansionScale = mode === "facilities" ? 1 + Math.min(0.75, (draft.acquiredLand?.length ?? 0) * 0.22) : 1;
+    const position = CAMERA[next].map((coordinate) => coordinate * cameraScale * campusExpansionScale) as [number, number, number];
     cameraPositionRef.current = position;
     const controls = controlsRef.current;
     if (controls) {
@@ -1105,11 +1788,13 @@ export default function StadiumScene({ club, draft, selectedStand, onSelectStand
     }
   };
 
-  return <div className="stadium-scene-shell">
+  return <div className={`stadium-scene-shell ${placementFacility ? "facility-placement-mode" : ""} ${mode === "match" ? "stadium-scene-match-mode" : ""}`}>
     <div className="stadium-scene-stage" ref={stageRef} />
     {webglUnavailable && <div className="stadium-webgl-fallback" role="status"><strong>3D preview unavailable in this browser</strong><span>The stadium plan is ready. Try enabling hardware acceleration to orbit the 3D ground.</span></div>}
-    <div className="stadium-scene-toolbar" role="group" aria-label="Stadium camera views">{(["Aerial", "Broadcast", "Pitch"] as const).map((view) => <button type="button" key={view} aria-pressed={preset === view} className={preset === view ? "active" : ""} onClick={() => resetView(view)}>{view}</button>)}</div>
-    <div className="stadium-scene-selection" aria-live="polite">{selectedStand ? `${selectedStand.toUpperCase()} STAND SELECTED · DESIGN IT BELOW` : "CLICK A STAND TO SELECT AND EDIT"}</div>
-    <div className="stadium-scene-tip"><span>DRAG TO SPIN 360°</span><i /> SCROLL TO ZOOM</div>
+    {mode === "match" ? <><div className="match-stadium-live-tag"><span /> LIVE MATCH · {matchMinute >= 90 ? "90′" : `${matchMinute}′`}</div><div className="stadium-scene-tip"><span>DRAG TO ORBIT</span><i /> SCROLL TO ZOOM</div></> : <>
+      {placementFacility && <div className="stadium-placement-prompt" role="status"><strong>PLACING {placementFacility.replace(/([A-Z])/g, " $1").toUpperCase()}</strong><span>{placementNotice || "Click an open area around the stadium to set its position"}</span></div>}
+      <div className="stadium-scene-toolbar" role="group" aria-label="Stadium camera views">{(["Aerial", "Campus", "Broadcast", "Pitch"] as const).map((view) => <button type="button" key={view} aria-pressed={preset === view} className={preset === view ? "active" : ""} onClick={() => resetView(view)}>{view}</button>)}</div>
+      <div className="stadium-scene-tip"><span>DRAG TO SPIN 360°</span><i /> SCROLL TO ZOOM</div>
+    </>}
   </div>;
 }

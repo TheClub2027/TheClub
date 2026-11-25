@@ -1,10 +1,10 @@
 import type { AcademyRecord, Player, PlayerAttributes, PlayerClubRecord, PlayerStats, Position, SquadLevel } from "./game";
 import { ENGLISH_CLUB_SEEDS } from "./league-pyramid";
-import { WORLD_CLUB_SEEDS, WORLD_COUNTRIES, WORLD_LEAGUES, type WorldContinent } from "./world-leagues";
+import { WORLD_CLUB_COUNT, WORLD_CLUB_SEEDS, WORLD_COUNTRIES, WORLD_LEAGUES, type WorldContinent } from "./world-leagues";
 
-export const WORLD_PLAYER_COUNT = 90_000;
-export const WORLD_FIRST_TEAM_COUNT = 60_000;
-export const WORLD_ACADEMY_COUNT = 22_500;
+export const WORLD_PLAYER_COUNT = 200_000;
+export const WORLD_FIRST_TEAM_COUNT = 115_000;
+export const WORLD_ACADEMY_COUNT = 70_000;
 export const WORLD_FREE_AGENT_COUNT = WORLD_PLAYER_COUNT - WORLD_FIRST_TEAM_COUNT - WORLD_ACADEMY_COUNT;
 
 export type WorldPlayerGroup = "First team" | "Academy" | "Free agent";
@@ -141,8 +141,13 @@ function worldPlayer(index: number): WorldPlayerDetail {
 export function getWorldPlayerName(index: number) {
   const first = FIRST_NAMES[index % FIRST_NAMES.length];
   const last = LAST_NAMES[Math.floor(index / FIRST_NAMES.length) % LAST_NAMES.length];
-  const middle = String.fromCharCode(65 + Math.floor(index / (FIRST_NAMES.length * LAST_NAMES.length)) % 26);
-  return `${first} ${middle}. ${last}`;
+  let initialNumber = Math.floor(index / (FIRST_NAMES.length * LAST_NAMES.length));
+  let initials = "";
+  while (initialNumber >= 0) {
+    initials = String.fromCharCode(65 + initialNumber % 26) + initials;
+    initialNumber = Math.floor(initialNumber / 26) - 1;
+  }
+  return `${first} ${initials}. ${last}`;
 }
 
 function toListing(player: WorldPlayerDetail): WorldPlayerListing {
@@ -169,7 +174,8 @@ export function getWorldPlayerDetails(playerId: string): WorldPlayerDetail | nul
   const pathway = ([{ age: 5, squadLevel: "Foundation" }, { age: 9, squadLevel: "Academy" }, { age: 12, squadLevel: "U16" }, { age: 16, squadLevel: "U18" }, { age: 18, squadLevel: "Reserves" }, { age: 21, squadLevel: "First team" }] as { age: number; squadLevel: SquadLevel }[]).filter((stage) => stage.age <= player.age);
   const academyHistory: AcademyRecord[] = pathway.map((stage) => ({ season: Math.max(1, 2026 - player.age + stage.age - 2005), age: stage.age, squadLevel: stage.squadLevel, academyLevel: stage.age <= 11 ? 1 : 2 }));
   const formerClubRegion = pick(COUNTRIES, index, 73);
-  const formerClubName = CLUBS_BY_COUNTRY.get(formerClubRegion.country)?.[index % 8]?.name ?? "Unattached";
+  const formerCountryClubs = CLUBS_BY_COUNTRY.get(formerClubRegion.country) ?? [];
+  const formerClubName = formerCountryClubs.length ? formerCountryClubs[index % formerCountryClubs.length].name : "Unattached";
   const records: PlayerClubRecord[] = player.clubId ? [{ clubId: player.clubId, clubName: player.clubName, country: player.country, fromSeason: Math.max(1, 2026 - Math.max(1, player.age - 18) - 2025), toSeason: null, squadLevel: player.squadLevel ?? "First team", ...stats }] : [{ clubId: null, clubName: formerClubName, country: player.country, fromSeason: Math.max(1, 2026 - Math.max(1, player.age - 18) - 2025), toSeason: 2026, squadLevel: "First team", ...stats }];
   return {
     ...player,
@@ -190,6 +196,15 @@ export function getWorldPlayerListing(playerId: string): WorldPlayerListing | nu
 
 export function getWorldPlayerCounts() {
   return { firstTeam: WORLD_FIRST_TEAM_COUNT, academy: WORLD_ACADEMY_COUNT, freeAgents: WORLD_FREE_AGENT_COUNT, total: WORLD_PLAYER_COUNT };
+}
+
+export function getWorldSquadDepth() {
+  const clubCount = ENGLISH_CLUB_SEEDS.length + WORLD_CLUB_COUNT;
+  return {
+    clubs: clubCount,
+    firstTeamMinimum: Math.floor(WORLD_FIRST_TEAM_COUNT / clubCount),
+    academyMinimum: Math.floor(WORLD_ACADEMY_COUNT / clubCount),
+  };
 }
 
 export function searchWorldDatabase(query: string, group: WorldPlayerFilter, page: number, pageSize = 20, criteria: WorldPlayerCriteria = {}): WorldSearchPage {

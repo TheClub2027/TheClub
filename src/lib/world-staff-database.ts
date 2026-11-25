@@ -1,7 +1,7 @@
 import { ENGLISH_CLUB_SEEDS } from "./league-pyramid";
 import { WORLD_CLUB_SEEDS } from "./world-leagues";
 
-export const WORLD_STAFF_COUNT = 25_000;
+export const WORLD_STAFF_COUNT = 75_000;
 const STAFF_CLUB_SEEDS = [...ENGLISH_CLUB_SEEDS, ...WORLD_CLUB_SEEDS];
 export const BASE_CLUB_STAFF_COUNT = STAFF_CLUB_SEEDS.length * 12;
 
